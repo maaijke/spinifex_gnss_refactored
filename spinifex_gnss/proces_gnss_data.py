@@ -56,9 +56,33 @@ def _get_gim_phase_corrected(
     phase_tec: np.ndarray,
     ipp_sat_stat: IPP,
     timeselect: np.ndarray,
-    ionex: IonexData
+    ionex: IonexData,
+    max_time_diff_min: float = MAX_TIME_DIFF_MINUTES
 ) -> tuple[np.ndarray, np.ndarray]:
-    """Correct carrier phase TEC using GIM."""
+    """
+    Correct carrier phase TEC using GIM.
+    
+    Parameters
+    ----------
+    phase_tec : np.ndarray
+        STEC from carrier phases
+    ipp_sat_stat : IPP
+        Ionospheric pierce points
+    timeselect : np.ndarray
+        Indices of target times (for checking arc overlap)
+    ionex : IonexData
+        Global ionospheric map
+    max_time_diff_min : float, optional
+        Maximum time difference for time averaging (minutes)
+        Used to expand time window for arc selection
+        
+    Notes
+    -----
+    OPTIMIZATION: Only processes arcs (cycle slip segments) that overlap
+    with the extended time window. Since we now use time averaging,
+    we need to check if arc overlaps with target_time ± max_time_diff_min,
+    not just the exact target time.
+    """
     cycle_slips = _get_cycle_slips(phase_tec=phase_tec)
     phase_bias = np.zeros_like(phase_tec)
     phase_std = np.zeros_like(phase_tec)
@@ -71,6 +95,26 @@ def _get_gim_phase_corrected(
         )
     )
     
+    # Build extended time window for time averaging
+    # For each target time, we may select obs within ±max_time_diff_min
+    # So we need to process arcs that overlap with this extended window
+    if len(timeselect) > 0:
+        # Convert max_time_diff to observation index units
+        # Assuming ~30-second observations: max_time_diff_min minutes → N indices
+        time_buffer_indices = int(np.ceil(max_time_diff_min * 60 / 30))  # Conservative estimate
+        
+        # Expand timeselect window
+        extended_timeselect = set()
+        for t_idx in timeselect:
+            # Add indices within ±time_buffer around each target
+            start_idx = max(0, t_idx - time_buffer_indices)
+            end_idx = min(len(phase_tec), t_idx + time_buffer_indices + 1)
+            extended_timeselect.update(range(start_idx, end_idx))
+        
+        extended_timeselect = np.array(sorted(extended_timeselect))
+    else:
+        extended_timeselect = timeselect
+    
     for seg in np.unique(cycle_slips):
         seg_idx = np.nonzero(cycle_slips == seg)[0]
         
@@ -78,7 +122,9 @@ def _get_gim_phase_corrected(
             phase_bias[seg_idx] = np.nan
             continue
             
-        if np.intersect1d(seg_idx, timeselect).size == 0:
+        # OPTIMIZATION: Skip arcs that don't overlap with extended time window
+        if np.intersect1d(seg_idx, extended_timeselect).size == 0:
+            # This arc is far from any target time, skip it
             continue
             
         ipp = ipp_sat_stat.loc[:, h_idx][seg_idx]
@@ -499,11 +545,16 @@ def get_gnss_station_density(
                 )
             )
             
-            # For time averaging, we need all time indices
+            # For time averaging, we need all time indices that might be used
+            # Build extended time window
             all_time_indices = np.arange(len(gnss_data.times))
             
             stec_value, stec_error = _get_gim_phase_corrected(
-                phase_stec, ipp_sat_stat[-1], all_time_indices, ionex
+                phase_stec, 
+                ipp_sat_stat[-1], 
+                all_time_indices,  # Pass all indices, function filters internally
+                ionex,
+                max_time_diff_min=max_time_diff_min  # Pass time window parameter
             )
             stec_values.append(stec_value)
             stec_errors.append(stec_error)
