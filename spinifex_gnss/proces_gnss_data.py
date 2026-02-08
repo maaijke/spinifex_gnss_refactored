@@ -1,7 +1,11 @@
 """
-GNSS data processing with optional debug mode.
+GNSS data processing with TIME AVERAGING.
 
-Add DEBUG_MODE parameter to save intermediate data for algorithm testing.
+Enhancement: Combines multiple time slots for better spatial coverage.
+
+Key change: Instead of nearest-neighbor time matching, we select N nearest
+time slots (e.g., ±2.5 minutes) to get more satellite positions and pierce points.
+This significantly improves interpolation by increasing measurement density.
 """
 
 import numpy as np
@@ -9,10 +13,7 @@ from astropy.time import Time
 import astropy.units as u
 from astropy.coordinates import EarthLocation
 from concurrent.futures import as_completed, ProcessPoolExecutor
-from pathlib import Path
-from typing import Optional
-import pickle
-from datetime import datetime
+import gc
 
 from spinifex.geometry import IPP
 from spinifex.ionospheric import tec_data
@@ -28,71 +29,27 @@ from spinifex_gnss.config import (
     GPS_TO_UTC_CORRECTION_DAYS, MAX_WORKERS_DENSITY,
 )
 
-# Global debug settings
-DEBUG_MODE = False
-DEBUG_DIR = Path('./debug_gnss')
 
+# ============================================================================
+# Time Averaging Configuration
+# ============================================================================
 
-def enable_debug_mode(debug_dir: Optional[Path] = None):
-    """
-    Enable debug mode to save intermediate data.
-    
-    Parameters
-    ----------
-    debug_dir : Path, optional
-        Directory for debug files, default './debug_gnss'
-        
-    Examples
-    --------
-    >>> from spinifex_gnss.proces_gnss_data import enable_debug_mode
-    >>> enable_debug_mode()
-    >>> # Now all processing saves debug data
-    """
-    global DEBUG_MODE, DEBUG_DIR
-    DEBUG_MODE = True
-    if debug_dir:
-        DEBUG_DIR = debug_dir
-    DEBUG_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"✓ Debug mode enabled! Files will be saved to: {DEBUG_DIR}")
+# Number of time slots to combine (5 = ±2 slots around target)
+N_TIME_SLOTS = 5
 
+# Maximum time difference to include (in minutes)
+MAX_TIME_DIFF_MINUTES = 2.5
 
-def disable_debug_mode():
-    """Disable debug mode."""
-    global DEBUG_MODE
-    DEBUG_MODE = False
-    print("✓ Debug mode disabled")
+# Time weighting in interpolation (True = weight by 1/time_distance)
+USE_TIME_WEIGHTING = True
 
-
-def _save_debug_data(data: dict, filename: str):
-    """Save debug data to pickle file."""
-    if not DEBUG_MODE:
-        return
-    
-    filepath = DEBUG_DIR / filename
-    with open(filepath, 'wb') as f:
-        pickle.dump(data, f)
-    print(f"  [DEBUG] Saved: {filepath}")
-
-
-def _save_debug_summary(text: str, filename: str):
-    """Save debug summary to text file."""
-    if not DEBUG_MODE:
-        return
-    
-    filepath = DEBUG_DIR / filename
-    with open(filepath, 'w') as f:
-        f.write(text)
-    print(f"  [DEBUG] Saved: {filepath}")
-
-
-# [Rest of the functions remain the same as before - just add debug calls]
 
 def _get_distance_km(loc1: EarthLocation, loc2: EarthLocation) -> np.ndarray:
-    """Calculate distance between two sets of locations."""
+    """Calculate distance between locations."""
     dx = loc1.x.value - loc2.x.value
     dy = loc1.y.value - loc2.y.value
     dz = loc1.z.value - loc2.z.value
-    return np.sqrt(dx**2 + dy**2 + dz**2) / 1000.0
+    return np.sqrt(dx*dx + dy*dy + dz*dz) * 0.001
 
 
 def _get_gim_phase_corrected(
@@ -135,131 +92,346 @@ def _get_gim_phase_corrected(
         
         high_el_mask = elevation > ELEVATION_CUT
         
-        phase_bias[seg_idx] = np.nanmean(
-            gim_tec[high_el_mask]
-            * ipp_sat_stat.airmass[:, h_idx][seg_idx][high_el_mask]
-            - phase_tec[seg_idx][high_el_mask],
-        )
-        
-        data_count = np.sum(~np.isnan(phase_tec[seg_idx][high_el_mask]))
-        if data_count > 1:
-            phase_std[seg_idx] = np.nanstd(
+        if np.sum(high_el_mask) > 0:
+            phase_bias[seg_idx] = np.nanmean(
                 gim_tec[high_el_mask]
                 * ipp_sat_stat.airmass[:, h_idx][seg_idx][high_el_mask]
-                - phase_tec[seg_idx][high_el_mask]
-            ) / np.sqrt(data_count)
-        else:
-            phase_std[seg_idx] = np.nan
+                - phase_tec[seg_idx][high_el_mask],
+            )
+            
+            data_count = np.sum(~np.isnan(phase_tec[seg_idx][high_el_mask]))
+            if data_count > 1:
+                phase_std[seg_idx] = np.nanstd(
+                    gim_tec[high_el_mask]
+                    * ipp_sat_stat.airmass[:, h_idx][seg_idx][high_el_mask]
+                    - phase_tec[seg_idx][high_el_mask]
+                ) / np.sqrt(data_count)
+            else:
+                phase_std[seg_idx] = np.nan
     
     return phase_tec + phase_bias, phase_std
 
 
-def _get_distance_ipp(
+def _select_time_window(
+    target_time_mjd: float,
+    obs_times_mjd: np.ndarray,
+    n_slots: int = N_TIME_SLOTS,
+    max_diff_min: float = MAX_TIME_DIFF_MINUTES
+) -> np.ndarray:
+    """
+    Select indices of observations within time window around target.
+    
+    Instead of just nearest neighbor, selects N nearest observations
+    within max_diff_min minutes of target time.
+    
+    Parameters
+    ----------
+    target_time_mjd : float
+        Target time in MJD
+    obs_times_mjd : np.ndarray
+        Observation times in MJD
+    n_slots : int
+        Number of time slots to select
+    max_diff_min : float
+        Maximum time difference in minutes
+        
+    Returns
+    -------
+    np.ndarray
+        Indices of selected time slots
+    """
+    # Calculate time differences in minutes
+    time_diffs_min = np.abs(obs_times_mjd - target_time_mjd) * 24 * 60
+    
+    # Filter by maximum time difference
+    valid_mask = time_diffs_min <= max_diff_min
+    
+    if not np.any(valid_mask):
+        # If no observations within max_diff, use nearest
+        return np.array([np.argmin(time_diffs_min)])
+    
+    # Get indices of valid observations
+    valid_indices = np.where(valid_mask)[0]
+    valid_diffs = time_diffs_min[valid_mask]
+    
+    # Select n_slots nearest observations
+    if len(valid_indices) <= n_slots:
+        # Use all valid observations
+        selected_indices = valid_indices
+    else:
+        # Select n_slots nearest
+        nearest = np.argpartition(valid_diffs, n_slots - 1)[:n_slots]
+        selected_indices = valid_indices[nearest]
+    
+    return selected_indices
+
+
+def _get_distance_ipp_time_averaged(
     stec_values: np.ndarray,
     stec_errors: np.ndarray,
     ipp_sat_stat: list[IPP],
     ipp_target: IPP,
-    timeselect: np.ndarray,
+    obs_times: Time,
     profiles: np.ndarray,
+    n_time_slots: int = N_TIME_SLOTS,
+    max_time_diff_min: float = MAX_TIME_DIFF_MINUTES,
+    use_time_weighting: bool = USE_TIME_WEIGHTING,
 ) -> list[list[np.ndarray]]:
-    """Calculate VTEC and distance to target IPPs."""
-    Ntimes = ipp_target.times.shape[0]
+    """
+    Calculate VTEC and distances with TIME AVERAGING.
+    
+    Key Enhancement: Instead of selecting only the nearest time slot,
+    this selects N nearest time slots (e.g., ±2.5 minutes) to combine
+    measurements from multiple satellite positions.
+    
+    This significantly increases the number of measurements available
+    for interpolation, improving accuracy especially in sparse regions.
+    
+    Parameters
+    ----------
+    stec_values : np.ndarray
+        STEC values [satellites × times]
+    stec_errors : np.ndarray
+        STEC uncertainties [satellites × times]
+    ipp_sat_stat : list[IPP]
+        IPPs for each satellite
+    ipp_target : IPP
+        Target IPPs where density is needed
+    obs_times : Time
+        Observation times (GNSS time)
+    profiles : np.ndarray
+        Normalized electron density profiles [times × heights]
+    n_time_slots : int, optional
+        Number of time slots to combine, by default 5
+    max_time_diff_min : float, optional
+        Maximum time difference in minutes, by default 2.5
+    use_time_weighting : bool, optional
+        Weight measurements by inverse time distance, by default True
+        
+    Returns
+    -------
+    list[list[np.ndarray]]
+        Nested list [times][heights] of arrays with columns:
+        [VTEC, VTEC_error, dlon, dlat, time_weight (optional)]
+        
+    Notes
+    -----
+    Example: For target time T0, instead of using only measurements at T0,
+    we combine measurements from [T0-2, T0-1, T0, T0+1, T0+2] giving us
+    5× more satellite positions and pierce points for interpolation!
+    """
+    Ntimes_target = ipp_target.times.shape[0]
     Nheights = ipp_target.loc[0].shape[0]
     Nprns = stec_values.shape[0]
     
-    vtecs = np.full((Nprns, Ntimes, Nheights), np.nan, dtype=float)
-    vtec_errors = np.full((Nprns, Ntimes, Nheights), np.nan, dtype=float)
+    # GPS to UTC time correction
+    gpstime_correction = GPS_TO_UTC_CORRECTION_DAYS
     
-    el_select = np.array([
-        ipp.altaz.alt.deg[timeselect] > ELEVATION_CUT
-        for ipp in ipp_sat_stat
-    ])
+    # Prepare output structure
+    result = []
     
-    el_select = np.logical_and(~np.isnan(stec_values[:, timeselect]), el_select)
+    # Process each target time independently
+    for target_idx in range(Ntimes_target):
+        target_time_mjd = ipp_target.times[target_idx].mjd
+        
+        # Select observation time slots within window
+        time_indices = _select_time_window(
+            target_time_mjd + gpstime_correction,
+            obs_times.mjd,
+            n_slots=n_time_slots,
+            max_diff_min=max_time_diff_min
+        )
+        
+        # Calculate time weights if requested
+        if use_time_weighting:
+            time_diffs_min = np.abs(
+                obs_times.mjd[time_indices] - (target_time_mjd + gpstime_correction)
+            ) * 24 * 60
+            # Inverse time distance weighting (avoid division by zero)
+            time_weights = 1.0 / (time_diffs_min + 0.1)
+            time_weights /= np.sum(time_weights)  # Normalize
+        else:
+            time_weights = np.ones(len(time_indices)) / len(time_indices)
+        
+        # Collect data for all heights at this target time
+        height_data = []
+        
+        for hidx in range(Nheights):
+            # Lists to accumulate measurements from all time slots
+            all_vtec = []
+            all_vtec_errors = []
+            all_dlon = []
+            all_dlat = []
+            all_time_weights = []
+            
+            # Combine data from selected time slots
+            for time_slot_idx, time_weight in zip(time_indices, time_weights):
+                # Selection criteria for this time slot
+                el_select = np.array([
+                    ipp.altaz.alt.deg[time_slot_idx] > ELEVATION_CUT
+                    for ipp in ipp_sat_stat
+                ])  # prn mask
+                
+                # Check for valid STEC
+                valid_stec = ~np.isnan(stec_values[:, time_slot_idx])
+                el_select = np.logical_and(valid_stec, el_select)
+                
+                # Distance selection for this height
+                dist_select = np.array([
+                    _get_distance_km(
+                        ipp.loc[time_slot_idx, hidx],
+                        ipp_target.loc[target_idx, hidx]
+                    ) < DISTANCE_KM_CUT
+                    for ipp in ipp_sat_stat
+                ])  # prn mask
+                
+                # Combined selection
+                prn_select = np.logical_and(el_select, dist_select)
+                
+                # Get selected satellites for this time slot
+                selected_prns = np.where(prn_select)[0]
+                
+                if len(selected_prns) == 0:
+                    continue
+                
+                # Calculate VTEC for selected satellites
+                for prn_idx in selected_prns:
+                    # Weighted airmass for this PRN and time
+                    weighted_am = np.sum(
+                        profiles[target_idx] * ipp_sat_stat[prn_idx].airmass[time_slot_idx]
+                    )
+                    
+                    # Convert STEC to VTEC
+                    vtec = (
+                        profiles[target_idx, hidx] *
+                        stec_values[prn_idx, time_slot_idx] / weighted_am
+                    )
+                    vtec_error = (
+                        profiles[target_idx, hidx] *
+                        stec_errors[prn_idx, time_slot_idx]
+                    )
+                    
+                    # Calculate spatial offsets
+                    dlon = (
+                        np.cos(ipp_target.loc[target_idx, hidx].lat.rad) *
+                        (ipp_sat_stat[prn_idx].loc[time_slot_idx, hidx].lon.deg -
+                         ipp_target.loc[target_idx, hidx].lon.deg)
+                    )
+                    dlat = (
+                        ipp_sat_stat[prn_idx].loc[time_slot_idx, hidx].lat.deg -
+                        ipp_target.loc[target_idx, hidx].lat.deg
+                    )
+                    
+                    # Store measurement
+                    all_vtec.append(vtec)
+                    all_vtec_errors.append(vtec_error)
+                    all_dlon.append(dlon)
+                    all_dlat.append(dlat)
+                    all_time_weights.append(time_weight)
+            
+            # Combine measurements for this height
+            if len(all_vtec) > 0:
+                if use_time_weighting:
+                    # Include time weight as 5th column
+                    height_data.append(np.column_stack([
+                        all_vtec,
+                        all_vtec_errors,
+                        all_dlon,
+                        all_dlat,
+                        all_time_weights
+                    ]))
+                else:
+                    height_data.append(np.column_stack([
+                        all_vtec,
+                        all_vtec_errors,
+                        all_dlon,
+                        all_dlat,
+                    ]))
+            else:
+                height_data.append(np.array([]))
+        
+        result.append(height_data)
     
-    dist_select = np.array([
-        _get_distance_km(ipp.loc[timeselect], ipp_target.loc) < DISTANCE_KM_CUT
-        for ipp in ipp_sat_stat
-    ])
-    
-    prn_select = np.logical_and(el_select[:, :, np.newaxis], dist_select)
-    
-    weighted_am = np.array([
-        profiles * ipp.airmass[timeselect]
-        for ipp in ipp_sat_stat
-    ])
-    weighted_am = np.sum(weighted_am, axis=-1)
-    
-    vtec_values = profiles * (stec_values[:, timeselect] / weighted_am)[..., np.newaxis]
-    vtec_error_values = profiles * stec_errors[:, timeselect][..., np.newaxis]
-    
-    dlons = np.array([
-        np.cos(ipp_target.loc.lat.rad) * (ipp.loc.lon.deg[timeselect] - ipp_target.loc.lon.deg)
-        for ipp in ipp_sat_stat
-    ])
-    
-    dlats = np.array([
-        ipp.loc.lat.deg[timeselect] - ipp_target.loc.lat.deg
-        for ipp in ipp_sat_stat
-    ])
-    
-    vtecs[prn_select] = vtec_values[prn_select]
-    vtec_errors[prn_select] = vtec_error_values[prn_select]
-    
-    return [
-        [
-            np.concatenate((
-                vtecs[:, timeidx, hidx][~np.isnan(vtecs[:, timeidx, hidx])][:, np.newaxis],
-                vtec_errors[:, timeidx, hidx][~np.isnan(vtecs[:, timeidx, hidx])][:, np.newaxis],
-                dlons[:, timeidx, hidx][~np.isnan(vtecs[:, timeidx, hidx])][:, np.newaxis],
-                dlats[:, timeidx, hidx][~np.isnan(vtecs[:, timeidx, hidx])][:, np.newaxis],
-            ), axis=-1)
-            for hidx in range(Nheights)
-        ]
-        for timeidx in range(Ntimes)
-    ]
+    return result
 
 
-def get_interpolated_tec(input_data: list[list[np.ndarray]]) -> np.ndarray:
-    """Interpolate VTEC to target location."""
+def get_interpolated_tec(
+    input_data: list[list[np.ndarray]],
+    use_time_weighting: bool = USE_TIME_WEIGHTING
+) -> np.ndarray:
+    """
+    Interpolate VTEC to target (with optional time weighting).
+    
+    Parameters
+    ----------
+    input_data : list[list[np.ndarray]]
+        Nested list [times][heights] of arrays with columns:
+        [VTEC, VTEC_error, dlon, dlat] or
+        [VTEC, VTEC_error, dlon, dlat, time_weight]
+    use_time_weighting : bool
+        If True, expects 5 columns and combines time+error weighting
+        
+    Returns
+    -------
+    np.ndarray
+        Electron density at target IPPs [times × heights]
+    """
     fitted_density = np.zeros((len(input_data), len(input_data[0])))
     
     for timeidx, input_time in enumerate(input_data):
-        for hidx, vtec_dlong_dlat in enumerate(input_time):
-            if not vtec_dlong_dlat.shape or vtec_dlong_dlat.shape[0] < 2:
+        for hidx, measurements in enumerate(input_time):
+            if not measurements.shape or measurements.shape[0] < 2:
                 continue
             
-            dist = np.linalg.norm(vtec_dlong_dlat[:, 2:], axis=1)
+            # Extract columns
+            vtec = measurements[:, 0]
+            errors = measurements[:, 1]
+            dlon = measurements[:, 2]
+            dlat = measurements[:, 3]
+            
+            # Select nearest NDIST_POINTS measurements
+            dist = np.sqrt(dlon**2 + dlat**2)
             dist_select = np.zeros(dist.shape, dtype=bool)
             nearest_indices = np.argpartition(
                 dist, min(NDIST_POINTS, dist.shape[0] - 1), axis=0
             )[:NDIST_POINTS]
             dist_select[nearest_indices] = True
             
+            # Build design matrix for polynomial fit
             A = np.ones(
-                vtec_dlong_dlat[dist_select].shape[:1] +
-                (((INTERPOLATION_ORDER) ** 2 + INTERPOLATION_ORDER) // 2,),
+                (np.sum(dist_select),
+                 ((INTERPOLATION_ORDER ** 2 + INTERPOLATION_ORDER) // 2)),
                 dtype=float,
             )
             
-            weight = 1.0 / vtec_dlong_dlat[dist_select][:, 1]
+            # Calculate weights
+            if use_time_weighting and measurements.shape[1] >= 5:
+                # Combine inverse-variance and time weighting
+                time_weights = measurements[dist_select, 4]
+                variance_weights = 1.0 / errors[dist_select]
+                weights = variance_weights * time_weights
+            else:
+                # Just inverse-variance weighting
+                weights = 1.0 / errors[dist_select]
             
+            # Build polynomial terms
             idx = 0
             for ilon in range(INTERPOLATION_ORDER):
                 for ilat in range(INTERPOLATION_ORDER):
                     if ilon + ilat <= INTERPOLATION_ORDER - 1:
                         if idx > 0:
                             A[:, idx] = (
-                                vtec_dlong_dlat[dist_select][:, 2] ** ilon *
-                                vtec_dlong_dlat[dist_select][:, 3] ** ilat
+                                dlon[dist_select] ** ilon *
+                                dlat[dist_select] ** ilat
                             )
                         idx += 1
             
-            w = weight * np.eye(A.shape[0])
+            # Weighted least squares fit
+            w = weights * np.eye(A.shape[0])
             AwT = A.T @ w
             
             try:
-                par = (np.linalg.inv(AwT @ A) @ (AwT @ vtec_dlong_dlat[dist_select][:, :1])).squeeze()
+                par = (np.linalg.inv(AwT @ A) @ (AwT @ vtec[dist_select][:, np.newaxis])).squeeze()
                 fitted_density[timeidx, hidx] = par[0]
             except:
                 continue
@@ -273,21 +445,41 @@ def get_gnss_station_density(
     profiles: np.ndarray,
     sp3_data,
     ionex: IonexData,
+    n_time_slots: int = N_TIME_SLOTS,
+    max_time_diff_min: float = MAX_TIME_DIFF_MINUTES,
+    use_time_weighting: bool = USE_TIME_WEIGHTING,
 ) -> list[list[np.ndarray]]:
-    """Process one GNSS station."""
+    """
+    Process one GNSS station with TIME AVERAGING.
+    
+    Parameters
+    ----------
+    gnss_data : GNSSData
+        Observations from one station
+    ipp_target : IPP
+        Target IPPs
+    profiles : np.ndarray
+        Density profiles [times × heights]
+    sp3_data
+        Satellite orbit data
+    ionex : IonexData
+        Ionospheric map
+    n_time_slots : int, optional
+        Number of time slots to combine
+    max_time_diff_min : float, optional
+        Maximum time difference in minutes
+    use_time_weighting : bool, optional
+        Use time-distance weighting
+        
+    Returns
+    -------
+    list[list[np.ndarray]]
+        Data structure for interpolation
+    """
     prns = sorted(gnss_data.gnss.keys())
     stec_values = []
     stec_errors = []
     ipp_sat_stat = []
-    
-    gpstime_correction = GPS_TO_UTC_CORRECTION_DAYS
-    
-    timeselect = np.argmin(
-        np.abs(
-            ipp_target.times.mjd - gnss_data.times.mjd[:, np.newaxis] + gpstime_correction
-        ),
-        axis=0,
-    )
     
     for prn in prns:
         try:
@@ -306,42 +498,32 @@ def get_gnss_station_density(
                     height_array=ipp_target.loc[0].height,
                 )
             )
+            
+            # For time averaging, we need all time indices
+            all_time_indices = np.arange(len(gnss_data.times))
+            
             stec_value, stec_error = _get_gim_phase_corrected(
-                phase_stec, ipp_sat_stat[-1], timeselect, ionex
+                phase_stec, ipp_sat_stat[-1], all_time_indices, ionex
             )
             stec_values.append(stec_value)
             stec_errors.append(stec_error)
         except Exception as e:
             print(f"Failed for {gnss_data.station} {prn}: {e}")
     
-    result = _get_distance_ipp(
+    # Use time-averaged distance calculation
+    result = _get_distance_ipp_time_averaged(
         stec_values=np.array(stec_values),
         stec_errors=np.array(stec_errors),
         ipp_sat_stat=ipp_sat_stat,
         ipp_target=ipp_target,
-        timeselect=timeselect,
+        obs_times=gnss_data.times,
         profiles=profiles,
+        n_time_slots=n_time_slots,
+        max_time_diff_min=max_time_diff_min,
+        use_time_weighting=use_time_weighting,
     )
     
-    # Save debug data if enabled
-    if DEBUG_MODE:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        _save_debug_data({
-            'station': gnss_data.station,
-            'constellation': gnss_data.constellation,
-            'satellites': prns,
-            'stec_values': np.array(stec_values),
-            'stec_errors': np.array(stec_errors),
-            'vtec_data': result,
-            'obs_codes': {
-                'C1': gnss_data.c1_str,
-                'C2': gnss_data.c2_str,
-                'L1': gnss_data.l1_str,
-                'L2': gnss_data.l2_str,
-            }
-        }, f"station_{gnss_data.station}_{gnss_data.constellation}_{timestamp}.pkl")
-    
-    del gnss_data, stec_values, ipp_sat_stat
+    del stec_values, stec_errors, ipp_sat_stat
     return result
 
 
@@ -350,43 +532,73 @@ def get_ipp_density(
     gnss_data_list: list[GNSSData],
     sp3_data,
     ionex: IonexData,
+    n_time_slots: int = N_TIME_SLOTS,
+    max_time_diff_min: float = MAX_TIME_DIFF_MINUTES,
+    use_time_weighting: bool = USE_TIME_WEIGHTING,
 ) -> tec_data.ElectronDensity:
-    """Calculate electron density at target IPPs."""
+    """
+    Calculate electron density with TIME AVERAGING.
+    
+    Parameters
+    ----------
+    ipp_target : IPP
+        Target ionospheric pierce points
+    gnss_data_list : list[GNSSData]
+        GNSS observations from all stations
+    sp3_data
+        Satellite orbit data
+    ionex : IonexData
+        Ionospheric map
+    n_time_slots : int, optional
+        Number of time slots to combine, by default 5
+    max_time_diff_min : float, optional
+        Maximum time difference in minutes, by default 2.5
+    use_time_weighting : bool, optional
+        Use time-distance weighting, by default True
+        
+    Returns
+    -------
+    tec_data.ElectronDensity
+        Electron density and uncertainties
+        
+    Notes
+    -----
+    Time averaging significantly improves interpolation quality by:
+    - Increasing number of measurements per target point (5×)
+    - Providing better spatial coverage from different satellite positions
+    - Reducing impact of outliers through more robust fitting
+    """
     profiles = get_profile(ipp_target)
     
     Ntimes = ipp_target.times.shape[0]
     Nheights = ipp_target.loc.shape[1]
     
     all_data = [[[] for _ in range(Nheights)] for _ in range(Ntimes)]
-    stec_gnss_data = {}
     
+    # Process stations in parallel
     with ProcessPoolExecutor(max_workers=MAX_WORKERS_DENSITY) as executor:
-        future_to_station_constellation = {
+        future_to_station = {
             executor.submit(
                 get_gnss_station_density,
                 gnss_data, ipp_target, profiles, sp3_data, ionex,
+                n_time_slots, max_time_diff_min, use_time_weighting,
             ): gnss_data.station + gnss_data.constellation
             for gnss_data in gnss_data_list
         }
         
-        for future in as_completed(future_to_station_constellation):
-            station = future_to_station_constellation[future]
+        for future in as_completed(future_to_station):
+            station = future_to_station[future]
             try:
                 result = future.result()
-                stec_gnss_data[station] = result
+                
+                for itm in range(Ntimes):
+                    for hidx in range(Nheights):
+                        all_data[itm][hidx].append(result[itm][hidx])
+                
             except Exception as e:
                 print(f"Error processing {station}: {e}")
-                stec_gnss_data[station] = f"Error: {e}"
     
-    for station, station_data in stec_gnss_data.items():
-        if isinstance(station_data, str):
-            print(f"Skipping {station}: {station_data}")
-            continue
-            
-        for itm in range(Ntimes):
-            for hidx in range(Nheights):
-                all_data[itm][hidx].append(station_data[itm][hidx])
-    
+    # Concatenate measurements
     for itm in range(Ntimes):
         for hidx in range(Nheights):
             if all_data[itm][hidx]:
@@ -394,108 +606,13 @@ def get_ipp_density(
             else:
                 all_data[itm][hidx] = np.array([])
     
-    # Save debug data BEFORE interpolation
-    if DEBUG_MODE:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        
-        # Save interpolation input
-        _save_debug_data({
-            'input_data': all_data,
-            'ipp_times': ipp_target.times.iso,
-            'ipp_location': {
-                'lat': ipp_target.loc.lat.deg,
-                'lon': ipp_target.loc.lon.deg,
-                'height_km': ipp_target.loc.height.to('km').value,
-            },
-            'station_list': list(stec_gnss_data.keys()),
-        }, f"interpolation_input_{timestamp}.pkl")
-        
-        # Save human-readable summary
-        summary = _generate_debug_summary(all_data, ipp_target, stec_gnss_data)
-        _save_debug_summary(summary, f"interpolation_summary_{timestamp}.txt")
+    # Interpolate with time weighting
+    electron_density = get_interpolated_tec(all_data, use_time_weighting)
     
-    electron_density = get_interpolated_tec(all_data)
-    
-    del stec_gnss_data, all_data
+    del all_data, profiles
+    gc.collect()
     
     return tec_data.ElectronDensity(
         electron_density=electron_density,
         electron_density_error=np.zeros_like(electron_density),
     )
-
-
-def _generate_debug_summary(
-    all_data: list[list[np.ndarray]],
-    ipp_target: IPP,
-    station_data: dict
-) -> str:
-    """Generate human-readable debug summary."""
-    
-    lines = []
-    lines.append("=" * 80)
-    lines.append("INTERPOLATION INPUT DATA SUMMARY")
-    lines.append("=" * 80)
-    lines.append("")
-    
-    # Group by constellation
-    by_constellation = {}
-    for station_key in station_data.keys():
-        if not isinstance(station_data[station_key], str):  # Skip errors
-            const = station_key[-1]  # Last character is constellation
-            if const not in by_constellation:
-                by_constellation[const] = []
-            by_constellation[const].append(station_key)
-    
-    lines.append(f"Constellations present: {', '.join(sorted(by_constellation.keys()))}")
-    for const in sorted(by_constellation.keys()):
-        lines.append(f"  {const}: {len(by_constellation[const])} stations")
-    lines.append("")
-    
-    lines.append(f"Number of times: {len(all_data)}")
-    lines.append(f"Number of heights: {len(all_data[0]) if all_data else 0}")
-    lines.append("")
-    
-    lines.append("Target IPP Times (first 5):")
-    for i in range(min(5, len(ipp_target.times))):
-        lines.append(f"  {i}: {ipp_target.times[i].iso}")
-    if len(ipp_target.times) > 5:
-        lines.append(f"  ... and {len(ipp_target.times) - 5} more")
-    lines.append("")
-    
-    lines.append("Target IPP Heights (km):")
-    heights = ipp_target.loc[0].height.to('km').value
-    for i in range(min(5, len(heights))):
-        lines.append(f"  {i}: {heights[i]:.1f}")
-    if len(heights) > 5:
-        lines.append(f"  ... and {len(heights) - 5} more")
-    lines.append("")
-    
-    lines.append("-" * 80)
-    lines.append("DATA AVAILABILITY (first 3 times)")
-    lines.append("-" * 80)
-    
-    for tidx in range(min(3, len(all_data))):
-        lines.append(f"\nTime {tidx} ({ipp_target.times[tidx].iso}):")
-        for hidx in range(len(all_data[tidx])):
-            data = all_data[tidx][hidx]
-            n_meas = data.shape[0] if data.shape else 0
-            lines.append(f"  Height {hidx} ({heights[hidx]:.1f} km): {n_meas} measurements")
-            
-            if n_meas > 0:
-                vtec = data[:, 0]
-                lines.append(f"    VTEC: [{np.min(vtec):.2f}, {np.max(vtec):.2f}] TECU (mean={np.mean(vtec):.2f})")
-    
-    if len(all_data) > 3:
-        lines.append(f"\n... and {len(all_data) - 3} more time steps")
-    
-    lines.append("")
-    lines.append("=" * 80)
-    lines.append("CONSTELLATION BREAKDOWN")
-    lines.append("=" * 80)
-    
-    for const in sorted(by_constellation.keys()):
-        lines.append(f"\n{const} - GPS" if const == 'G' else f"\n{const}")
-        for station_key in sorted(by_constellation[const]):
-            lines.append(f"  {station_key}")
-    
-    return "\n".join(lines)
