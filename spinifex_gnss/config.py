@@ -51,22 +51,22 @@ GNSS_OBS_PRIORITY = {
 # ============================================================================
 
 # Distance threshold for selecting GNSS stations (in km)
-DISTANCE_KM_CUT = 500
+DISTANCE_KM_CUT = 300
 
 # Number of distance points for interpolation
-NDIST_POINTS = 30
+NDIST_POINTS = 300
 
 # Minimum elevation angle for satellite observations (in degrees)
 ELEVATION_CUT = 20
 
 # Interpolation order for spatial interpolation
-INTERPOLATION_ORDER = 2
+INTERPOLATION_ORDER = 3
 
 # Default ionospheric pierce point height (in km)
 DEFAULT_IONO_HEIGHT = 450 * u.km
 
 # Minimum distance for GNSS station selection (in km)
-MIN_DISTANCE_SELECT = 100 * u.km
+MIN_DISTANCE_SELECT = 1500 * u.km
 
 # ============================================================================
 # Time Constants
