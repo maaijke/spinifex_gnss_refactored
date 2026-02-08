@@ -1,0 +1,6 @@
+# Include data files in package distribution
+include README.md
+include LICENSE
+include requirements.txt
+recursive-include spinifex_gnss/data *.txt
+recursive-include docs *.md
