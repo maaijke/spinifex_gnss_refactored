@@ -642,19 +642,54 @@ def get_ipp_density(
             try:
                 result = future.result()
                 
+                # Validate result structure before merging
+                if not isinstance(result, list):
+                    print(f"Error: {station} returned {type(result)}, expected list")
+                    continue
+                
+                if len(result) != Ntimes:
+                    print(f"Error: {station} returned {len(result)} times, expected {Ntimes}")
+                    continue
+                
+                # Merge result into all_data
                 for itm in range(Ntimes):
+                    if not isinstance(result[itm], list):
+                        print(f"Error: {station} result[{itm}] is {type(result[itm])}, expected list")
+                        continue
+                    
+                    if len(result[itm]) != Nheights:
+                        print(f"Error: {station} result[{itm}] has {len(result[itm])} heights, expected {Nheights}")
+                        continue
+                    
                     for hidx in range(Nheights):
-                        all_data[itm][hidx].append(result[itm][hidx])
+                        measurement = result[itm][hidx]
+                        
+                        # Validate measurement before appending
+                        if not isinstance(measurement, np.ndarray):
+                            print(f"Error: {station} result[{itm}][{hidx}] is {type(measurement)}, expected ndarray")
+                            continue
+                        
+                        # Only append if measurement has data (not empty)
+                        if measurement.shape and measurement.shape[0] > 0:
+                            all_data[itm][hidx].append(measurement)
                 
             except Exception as e:
                 print(f"Error processing {station}: {e}")
+                import traceback
+                traceback.print_exc()
     
     # Concatenate measurements
     for itm in range(Ntimes):
         for hidx in range(Nheights):
-            if all_data[itm][hidx]:
-                all_data[itm][hidx] = np.concatenate(all_data[itm][hidx], axis=0)
-            else:
+            if all_data[itm][hidx]:  # Has measurements to concatenate
+                try:
+                    all_data[itm][hidx] = np.concatenate(all_data[itm][hidx], axis=0)
+                except Exception as e:
+                    print(f"Error concatenating all_data[{itm}][{hidx}]: {e}")
+                    print(f"  Number of arrays: {len(all_data[itm][hidx])}")
+                    print(f"  Shapes: {[arr.shape for arr in all_data[itm][hidx]]}")
+                    all_data[itm][hidx] = np.array([])  # Fallback to empty
+            else:  # No measurements
                 all_data[itm][hidx] = np.array([])
     
     # Interpolate with time weighting
