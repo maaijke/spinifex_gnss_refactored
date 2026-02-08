@@ -13,6 +13,7 @@ import numpy as np
 from astropy.time import Time
 import astropy.units as u
 from astropy.coordinates import EarthLocation
+import gc
 from pathlib import Path
 from typing import Optional
 
@@ -335,7 +336,9 @@ def get_electron_density_gnss(
         
         all_data.append(day_density)
         print(f"  ✓ Day complete\n")
-    
+
+        del gnss_data_list, sp3_data, ionex
+        gc.collect()  # Force garbage collection
     # Combine results from all days
     print(f"Combining results from {len(all_data)} days...")
     combined_density = ElectronDensity(
