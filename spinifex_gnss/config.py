@@ -142,10 +142,10 @@ CYCLE_SLIP_THRESHOLD = 5.0
 # ============================================================================
 
 # Maximum number of worker processes for parallel RINEX processing
-MAX_WORKERS_RINEX = 4
+MAX_WORKERS_RINEX = 20
 
 # Maximum number of worker processes for station density calculations
-MAX_WORKERS_DENSITY = 4
+MAX_WORKERS_DENSITY = 20
 
 # ============================================================================
 # Data Quality Thresholds
