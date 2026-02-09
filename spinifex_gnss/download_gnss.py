@@ -70,16 +70,19 @@ async def _download_satpos_files_coro(
     yesterweek, _ = get_gps_week(yesterday)
     gpsweek, _ = get_gps_week(date)
     tomorrowweek, _ = get_gps_week(tomorrow)
-    
+    if yesterweek >= 2238:
+        use_path_label = "_IGS20/"
+    else:
+        use_path_label = ""
     # Build SP3 file URLs
     sp3_names.append(
-        f"{url}{yesterweek}_IGS20/GBM0MGXRAP_{yesterday.year}{yesterday.timetuple().tm_yday:03d}0000_01D_05M_ORB.SP3.gz"
+        f"{url}{yesterweek}{use_path_label}/GBM0MGXRAP_{yesterday.year}{yesterday.timetuple().tm_yday:03d}0000_01D_05M_ORB.SP3.gz"
     )
     sp3_names.append(
-        f"{url}{gpsweek}_IGS20/GBM0MGXRAP_{date.year}{date.timetuple().tm_yday:03d}0000_01D_05M_ORB.SP3.gz"
+        f"{url}{gpsweek}{use_path_label}/GBM0MGXRAP_{date.year}{date.timetuple().tm_yday:03d}0000_01D_05M_ORB.SP3.gz"
     )
     sp3_names.append(
-        f"{url}{tomorrowweek}_IGS20/GBM0MGXRAP_{tomorrow.year}{tomorrow.timetuple().tm_yday:03d}0000_01D_05M_ORB.SP3.gz"
+        f"{url}{tomorrowweek}{use_path_label}/GBM0MGXRAP_{tomorrow.year}{tomorrow.timetuple().tm_yday:03d}0000_01D_05M_ORB.SP3.gz"
     )
     
     # Note: CLK files removed - not used in refactored version
