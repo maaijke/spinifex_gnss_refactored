@@ -427,6 +427,93 @@ def _build_rinex2_filenames(station: str, year: int, doy: int) -> list[str]:
     
     return filenames
 
+def check_local_rinex_files(
+    stations: list[str],
+    date: datetime,
+    datapath: Path,
+) -> tuple[list[str], list[str],list[str]]:
+    """
+    Check which stations already have local RINEX files.
+    
+    This optimization avoids unnecessary server queries.
+    
+    Parameters
+    ----------
+    stations : list[str]
+        List of station IDs (9-char format)
+    date : datetime
+        Target date
+    datapath : Path
+        Data directory to check
+        
+    Returns
+    -------
+    tuple[list[str], list[str], list[Path]]
+        (stations_found, stations_missing, existing_file_paths)
+        
+    Examples
+    --------
+    >>> found, missing, paths = check_local_rinex_files(
+    ...     ['WSRT00NLD', 'IJMU00NLD'],
+    ...     datetime(2024, 6, 18),
+    ...     Path('./data/')
+    ... )
+    >>> print(f"Already have: {found}")
+    >>> print(f"Need to download: {missing}")
+    """
+    year = date.year
+    doy = date.timetuple().tm_yday
+    yy = year % 100
+    
+    datapath = Path(datapath)
+    stations_missing = []
+    existing_paths = []
+    
+    for station in stations:
+        found_path = None
+        
+        # RINEX3 patterns (preferred)
+        rinex3_patterns = [
+                f"{station}_R_{year}{doy:03d}0000_01D_30S_MO.crx.gz",
+                f"{station}_R_{year}{doy:03d}0000_01D_30S_MO.crx",
+                f"{station}_R_{year}{doy:03d}0000_01D_30S_MO.rnx.gz",
+                f"{station}_R_{year}{doy:03d}0000_01D_30S_MO.rnx",
+            ]
+            
+        for pattern in rinex3_patterns:
+            path = datapath / pattern
+            if path.exists():
+                found_path = (path.name, 'RINEX3')
+                break
+        
+        # RINEX2 patterns (fallback)
+        if found_path is None:
+            station_4char = station[:4].lower()
+            rinex2_patterns = [
+                f"{station_4char}{doy:03d}0.{yy}o.gz",
+                f"{station_4char}{doy:03d}0.{yy}d.gz",
+                f"{station_4char}{doy:03d}0.{yy}O.gz",
+                f"{station_4char}{doy:03d}0.{yy}d.Z",
+                f"{station_4char}{doy:03d}0.{yy}o",
+                f"{station_4char}{doy:03d}0.{yy}d",
+                f"{station_4char}{doy:03d}0.{yy}d.Z".upper(),
+                f"{station_4char}{doy:03d}0.{yy}o".upper(),
+                f"{station_4char}{doy:03d}0.{yy}d".upper(),
+            ]
+            
+            for pattern in rinex2_patterns:
+                path = datapath / pattern
+                if path.exists():
+                    found_path = (path.name, 'RINEX2')
+                    break
+        
+        if found_path:
+            existing_paths.append(found_path)
+        else:
+            stations_missing.append(station)
+    
+    return stations_missing, existing_paths
+
 
 async def download_rinex_coro(
     date: datetime,
@@ -468,7 +555,6 @@ async def download_rinex_coro(
     - More servers have it
     - Smaller files sometimes
     """
-    urls = []
     year = date.year
     yy = year - 2000
     doy = date.timetuple().tm_yday
@@ -499,12 +585,15 @@ async def download_rinex_coro(
     ]
     
     # Get directory listings
-    print(f"Checking RINEX3 servers for {date.date()}...")
-    rinex3_files = check_url(rinex3_urls) 
-    print(f"Checking RINEX2 directories for {date.date()}...")
-    rinex2_files = check_url(rinex2_urls)    
+    print("checking local files for {date.date()}")
+    stations_missing, urls = check_local_rinex_files(stations, date, datapath)
+    if len(stations_missing):
+        print(f"Checking RINEX3 servers for {date.date()}...")
+        rinex3_files = check_url(rinex3_urls) 
+        print(f"Checking RINEX2 directories for {date.date()}...")
+        rinex2_files = check_url(rinex2_urls)    
     # Find file for each station
-    for station in stations:
+    for station in stations_missing:
         found = False
         
         # Try RINEX3 first
