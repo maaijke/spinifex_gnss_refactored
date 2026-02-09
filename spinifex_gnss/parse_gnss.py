@@ -15,7 +15,8 @@ from pathlib import Path
 from typing import NamedTuple
 import concurrent.futures
 
-from spinifex_gnss.parse_rinex import get_rinex_data, RinexData
+from spinifex_gnss.parse_rinex_enhanced import get_rinex_data_auto as get_rinex_data
+from spinifex_gnss.parse_rinex import RinexData
 from spinifex_gnss.config import GNSS_OBS_PRIORITY, MAX_WORKERS_RINEX
 
 
