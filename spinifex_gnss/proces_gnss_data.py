@@ -29,7 +29,7 @@ from spinifex_gnss.gnss_stations import gnss_pos_dict
 from spinifex_gnss.tec_core import getphase_tec, get_transmission_time, _get_cycle_slips
 from spinifex_gnss.config import (
     DISTANCE_KM_CUT, NDIST_POINTS, ELEVATION_CUT, INTERPOLATION_ORDER,
-    GPS_TO_UTC_CORRECTION_DAYS, MAX_WORKERS_DENSITY,
+    GPS_TO_UTC_CORRECTION_DAYS, MAX_WORKERS_DENSITY,MIN_OBSERVATIONS_PER_SEGMENT
 )
 
 
@@ -106,7 +106,7 @@ def _get_gim_phase_corrected(
     for seg in np.unique(cycle_slips):
         seg_idx = np.nonzero(cycle_slips == seg)[0]
         
-        if seg_idx.shape[0] < 2:
+        if seg_idx.shape[0] < MIN_OBSERVATIONS_PER_SEGMENT:
             phase_bias[seg_idx] = np.nan
             continue
             

@@ -51,7 +51,7 @@ GNSS_OBS_PRIORITY = {
 # ============================================================================
 
 # Distance threshold for selecting GNSS stations (in km)
-DISTANCE_KM_CUT = 300
+DISTANCE_KM_CUT = 100
 
 # Number of distance points for interpolation
 NDIST_POINTS = 300
@@ -142,17 +142,17 @@ CYCLE_SLIP_THRESHOLD = 5.0
 # ============================================================================
 
 # Maximum number of worker processes for parallel RINEX processing
-MAX_WORKERS_RINEX = 20
+MAX_WORKERS_RINEX = 30
 
 # Maximum number of worker processes for station density calculations
-MAX_WORKERS_DENSITY = 20
+MAX_WORKERS_DENSITY = 30
 
 # ============================================================================
 # Data Quality Thresholds
 # ============================================================================
 
 # Minimum number of observations required per cycle slip segment
-MIN_OBSERVATIONS_PER_SEGMENT = 2
+MIN_OBSERVATIONS_PER_SEGMENT = 10
 
 # ============================================================================
 # File Naming Conventions
