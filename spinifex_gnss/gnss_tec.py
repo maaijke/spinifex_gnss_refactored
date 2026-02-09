@@ -160,7 +160,10 @@ def _select_times_from_ipp(ipp: IPP, indices: np.ndarray) -> IPP:
 def get_electron_density_gnss(
     ipp: IPP,
     data_directory: Optional[Path] = None,
-    max_workers: int = 20
+    max_workers: int = 20,
+    n_time_slots:int =5,
+    max_time_diff_min:float =2.5,
+    use_time_weighting:bool =True
 ) -> ElectronDensity:
     """
     Calculate electron density from GNSS observations.
@@ -332,6 +335,9 @@ def get_electron_density_gnss(
             ipp_target=selected_ipp,
             sp3_data=sp3_data,
             ionex=ionex,  # Pass IONEX data!
+            n_time_slots=n_time_slots,
+            max_time_diff_min=max_time_diff_min,
+            use_time_weighting=use_time_weighting
         )
         
         all_data.append(day_density)
