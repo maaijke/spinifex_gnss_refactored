@@ -260,7 +260,7 @@ def get_electron_density_gnss(
         ))
         
         # Get station names from downloaded files
-        st_list = sorted([f.name[:9] for f in gnss_file_list])
+        st_list = sorted([f.name[:4] for f in gnss_file_list])
         print(f"  Downloaded {len(st_list)} RINEX files for day 1")
         
         # Download next day's files for same stations
@@ -270,12 +270,12 @@ def get_electron_density_gnss(
             datapath=data_directory
         ))
         
-        st_list2 = sorted([f.name[:9] for f in gnss_file_list_next_day])
+        st_list2 = sorted([f.name[:4] for f in gnss_file_list_next_day])
         print(f"  Downloaded {len(st_list2)} RINEX files for day 2")
         
         # Only keep stations with data for both days
         if st_list != st_list2:
-            gnss_file_list = [f for f in gnss_file_list if f.name[:9] in st_list2]
+            gnss_file_list = [f for f in gnss_file_list if f.name[:4] in st_list2]
         
         # Pair up files from consecutive days
         gnss_file_pairs = list(zip(gnss_file_list, gnss_file_list_next_day))
@@ -286,7 +286,6 @@ def get_electron_density_gnss(
             gnss_file_pairs,
             max_workers=max_workers
         )
-        
         # Filter for valid data only
         gnss_data_list = [data for data in gnss_data_list if data.is_valid]
         print(f"  Valid GNSS data from {len(gnss_data_list)} stations")

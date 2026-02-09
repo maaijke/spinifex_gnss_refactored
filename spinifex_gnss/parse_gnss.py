@@ -17,7 +17,7 @@ import concurrent.futures
 
 from spinifex_gnss.parse_rinex_enhanced import get_rinex_data_auto as get_rinex_data
 from spinifex_gnss.parse_rinex import RinexData
-from spinifex_gnss.config import GNSS_OBS_PRIORITY, MAX_WORKERS_RINEX
+from spinifex_gnss.config import GNSS_OBS_PRIORITY, GNSS_OBS_PRIORITY_RINEX2, MAX_WORKERS_RINEX
 
 
 class GNSSData(NamedTuple):
@@ -70,6 +70,54 @@ def dummy_gnss_data(station: str, constellation: str) -> GNSSData:
         times=None,
         constellation=constellation,
     )
+
+def _get_obs_code(rinex_data:RinexData, constellation:str, rxlabels:list[str]):
+    try:
+
+        # Filter for C1, C2, C5, L1, L2, L5 observations
+        labels = [
+            code for code in sorted(rxlabels)
+            if code[1] in ['1', '2', '5']
+        ]
+        if rinex_data.header.version[0]=='3':
+            c1c2_labels = GNSS_OBS_PRIORITY[constellation]
+            # Find best available C1/C2 pair with corresponding L1/L2
+            c_tracking = None
+            
+            # Try each priority combination
+            for c1 in c1c2_labels["C1"]:
+                for c2 in c1c2_labels["C2"]:
+                    l1 = f"L{c1[-2:]}"
+                    l2 = f"L{c2[-2:]}"
+                    
+                    if (c1 in labels and c2 in labels and
+                        l1 in labels and l2 in labels):
+                        c_tracking = (c1, c2)
+                        break
+                if c_tracking:
+                    c1_str, c2_str = c_tracking
+                    l1_str = f"L{c1_str[-2:]}"
+                    l2_str = f"L{c2_str[-2:]}"    
+                    break            
+        
+            if not c_tracking:
+                return None,None,None,None
+        else:
+            c1c2_labels = GNSS_OBS_PRIORITY_RINEX2[constellation]
+            c1_str = [i for i in rxlabels if i in c1c2_labels['C1']][0]
+            c2_str = [i for i in rxlabels if i in c1c2_labels['C2']][0]
+            l1_str = [i for i in rxlabels if i in c1c2_labels['L1']][0]
+            l2_str = [i for i in rxlabels if i in c1c2_labels['L2']][0]
+            
+        
+
+
+        
+        # Extract observation codes
+
+        return c1_str, c2_str, l1_str, l2_str
+    except:
+        return None,None,None,None
 
 
 def get_gnss_data(
@@ -130,43 +178,16 @@ def get_gnss_data(
     
     # Process each constellation separately
     for constellation in constellations:
+        if not constellation in GNSS_OBS_PRIORITY.keys():
+            continue
         try:
             # Get observation code priorities for this constellation
-            c1c2_labels = GNSS_OBS_PRIORITY[constellation]
             rxlabels = rinex_data.header.datatypes[constellation]
-            
-            # Filter for C1, C2, C5, L1, L2, L5 observations
-            labels = [
-                code for code in sorted(rxlabels)
-                if code[1] in ['1', '2', '5']
-            ]
-            
-            # Find best available C1/C2 pair with corresponding L1/L2
-            c_tracking = None
-            
-            # Try each priority combination
-            for c1 in c1c2_labels["C1"]:
-                for c2 in c1c2_labels["C2"]:
-                    l1 = f"L{c1[-2:]}"
-                    l2 = f"L{c2[-2:]}"
-                    
-                    if (c1 in labels and c2 in labels and
-                        l1 in labels and l2 in labels):
-                        c_tracking = (c1, c2)
-                        break
-                if c_tracking:
-                    break
-            
-            if not c_tracking:
+            c1_str, c2_str, l1_str, l2_str = _get_obs_code(rinex_data, constellation, rxlabels) 
+            if c1_str  is None:        
                 print(f"No consistent observation codes found for {station} {constellation}")
                 gnss_data_list.append(dummy_gnss_data(station, constellation))
                 continue
-            
-            # Extract observation codes
-            c1_str, c2_str = c_tracking
-            l1_str = f"L{c1_str[-2:]}"
-            l2_str = f"L{c2_str[-2:]}"
-            
             # Get indices in observation array
             idx_c1 = rxlabels.index(c1_str)
             idx_c2 = rxlabels.index(c2_str)

@@ -1,10 +1,16 @@
 """
-Custom SP3 file parser for satellite orbit data.
+Enhanced SP3 parser with support for legacy formats.
 
-This module replaces the georinex dependency with a pure Python implementation
-for parsing SP3 (Standard Product 3) orbit files.
+Handles SP3 format variations across different eras:
+- SP3-a (1991): Original format
+- SP3-b (1999): Extended format  
+- SP3-c (2001): Multi-GNSS format
+- SP3-d (2016): Latest format
 
-SP3 format specification: https://files.igs.org/pub/data/format/sp3c.txt
+Key differences in older formats:
+- Different header spacing
+- Varying date/time field positions
+- Different coordinate system labels
 """
 
 import gzip
@@ -21,55 +27,37 @@ class SP3Header(NamedTuple):
     """SP3 file header information."""
     
     version: str
-    """SP3 version (a, c, d)"""
     pos_vel_flag: str
-    """Position and/or velocity flag (P=positions only, V=velocities, PV=both)"""
     start_time: Time
-    """Data start time"""
     num_epochs: int
-    """Number of epochs in file"""
     data_used: str
-    """Data used indicator"""
     coordinate_system: str
-    """Coordinate system (e.g., IGS14, ITRF2014)"""
     orbit_type: str
-    """Orbit type (e.g., FIT, BCT, HLM)"""
     agency: str
-    """Agency code"""
     gps_week: int
-    """GPS week number"""
     seconds_of_week: float
-    """Seconds of GPS week at start"""
     epoch_interval: float
-    """Epoch interval in seconds"""
     mjd_start: int
-    """Modified Julian Day at start"""
     fractional_day: float
-    """Fractional part of day"""
     satellite_ids: list[str]
-    """List of satellite IDs in file"""
 
 
 class SP3Data(NamedTuple):
     """Parsed SP3 satellite orbit data."""
     
     header: SP3Header
-    """File header information"""
     times: Time
-    """Array of epoch times"""
     positions: dict[str, np.ndarray]
-    """Dictionary mapping satellite ID to position array [n_epochs, 3] in meters"""
     clock_corrections: dict[str, np.ndarray]
-    """Dictionary mapping satellite ID to clock correction array [n_epochs] in seconds"""
     position_stds: dict[str, np.ndarray] | None
-    """Optional position standard deviations [n_epochs, 3] in meters"""
     clock_stds: dict[str, np.ndarray] | None
-    """Optional clock standard deviations [n_epochs] in seconds"""
 
 
-def _parse_sp3_header(lines: list[str]) -> tuple[SP3Header, int]:
+def _parse_sp3_header_flexible(lines: list[str]) -> tuple[SP3Header, int]:
     """
-    Parse SP3 file header.
+    Parse SP3 file header with flexible spacing for legacy formats.
+    
+    Handles differences between SP3-a/b/c/d versions.
     
     Parameters
     ----------
@@ -80,54 +68,136 @@ def _parse_sp3_header(lines: list[str]) -> tuple[SP3Header, int]:
     -------
     tuple[SP3Header, int]
         Parsed header and line number where data starts
+        
+    Notes
+    -----
+    Old format (SP3-c, 2016):
+        #cP2016  6 16  0  0  0.00000000     288   u+U UNDEF FIT  GFZ
+        
+    New format (SP3-d, 2024):
+        #dP2024  6 16  0  0  0.00000000     288   u+U IGS20 FIT  GFZ
+        
+    Differences:
+    - Spacing in date fields varies
+    - Coordinate system may be "UNDEF" vs "IGS20"
+    - Version character: c vs d
     """
-    # First line: #cP2024 12  1  0  0  0.00000000      96 ORBIT IGS14 HLM  IGS
     first_line = lines[0]
+    
+    # Version (character 1)
     version = first_line[1]
+    
+    # Position/velocity flag (character 2)
     pos_vel_flag = first_line[2]
     
-    year = int(first_line[3:8])
-    month = int(first_line[9:11])
-    day = int(first_line[12:14])
-    hour = int(first_line[15:17])
-    minute = int(first_line[18:20])
-    second = float(first_line[21:32])
+    # Parse date/time - use flexible parsing to handle spacing variations
+    # Split by whitespace and take first 6 numbers after version
+    parts = first_line[3:].split()
     
-    start_time = Time(datetime(year, month, day, hour, minute, int(second)))
-    num_epochs = int(first_line[32:40])
-    data_used = first_line[40:46].strip()
-    coordinate_system = first_line[46:52].strip()
-    orbit_type = first_line[52:56].strip()
-    agency = first_line[56:60].strip()
+    try:
+        year = int(parts[0])
+        month = int(parts[1])
+        day = int(parts[2])
+        hour = int(parts[3])
+        minute = int(parts[4])
+        second = float(parts[5])
+    except (IndexError, ValueError) as e:
+        # Fallback to fixed positions if split fails
+        try:
+            year = int(first_line[3:8].strip())
+            month = int(first_line[9:11].strip())
+            day = int(first_line[12:14].strip())
+            hour = int(first_line[15:17].strip())
+            minute = int(first_line[18:20].strip())
+            second = float(first_line[21:32].strip())
+        except ValueError as e2:
+            raise ValueError(f"Could not parse date/time from first line: {first_line}") from e2
     
-    # Second line: ## 2333 604800.00000000   900.00000000 59917 0.0000000000000
+    start_time = Time(datetime(year, month, day, hour, minute, int(second)) +
+                     timedelta(seconds=second - int(second)))
+    
+    # Number of epochs - usually around position 32-40
+    try:
+        num_epochs = int(first_line[32:40].strip())
+    except ValueError:
+        # Try finding it in the parts
+        for i, part in enumerate(parts):
+            if i > 5 and part.isdigit():
+                num_epochs = int(part)
+                break
+        else:
+            num_epochs = 0
+    
+    # Data used, coordinate system, orbit type, agency
+    # These have flexible positions, extract from remaining parts
+    remaining = first_line[40:].strip()
+    remaining_parts = remaining.split()
+    
+    if len(remaining_parts) >= 4:
+        data_used = remaining_parts[0]
+        coordinate_system = remaining_parts[1]
+        orbit_type = remaining_parts[2]
+        agency = remaining_parts[3]
+    else:
+        # Fallback
+        data_used = first_line[40:46].strip()
+        coordinate_system = first_line[46:52].strip()
+        orbit_type = first_line[52:56].strip()
+        agency = first_line[56:60].strip()
+    
+    # Second line: GPS week, seconds, interval, MJD
     second_line = lines[1]
-    gps_week = int(second_line[3:8])
-    seconds_of_week = float(second_line[9:23])
-    epoch_interval = float(second_line[24:38])
-    mjd_start = int(second_line[39:44])
-    fractional_day = float(second_line[45:60])
+    second_parts = second_line.split()
+    
+    try:
+        gps_week = int(second_parts[1])
+        seconds_of_week = float(second_parts[2])
+        epoch_interval = float(second_parts[3])
+        mjd_start = int(second_parts[4])
+        fractional_day = float(second_parts[5])
+    except (IndexError, ValueError):
+        # Fallback to fixed positions
+        gps_week = int(second_line[3:8].strip())
+        seconds_of_week = float(second_line[9:23].strip())
+        epoch_interval = float(second_line[24:38].strip())
+        mjd_start = int(second_line[39:44].strip())
+        fractional_day = float(second_line[45:60].strip())
     
     # Satellite IDs: lines starting with '+'
     satellite_ids = []
-    for line in lines[2:]:
+    data_start_line = None
+    
+    for i, line in enumerate(lines[2:], start=2):
         if line.startswith('+'):
-            # Extract satellite IDs (3 characters each, starting at position 9)
-            sats = [line[i:i+3].strip() for i in range(9, len(line), 3) if line[i:i+3].strip()]
-            satellite_ids.extend(sats)
+            # Extract satellite IDs
+            # Format: "+   78   C01C03C04..." or "+        E14E18E19..."
+            # Satellites are 3 characters each, can start at various positions
+            sat_line = line[9:].strip()  # Skip "+ nnn" part
+            
+            # Split into 3-character chunks
+            j = 0
+            while j < len(sat_line):
+                sat_id = sat_line[j:j+3].strip()
+                if sat_id and sat_id != '00':  # Skip padding
+                    satellite_ids.append(sat_id)
+                j += 3
+                
         elif line.startswith('++'):
-            # Accuracy exponents - skip for now
+            # Accuracy exponents - skip
             continue
-        elif line.startswith('%c') or line.startswith('%f') or line.startswith('%i'):
-            # File type, time system, etc. - skip for now
+        elif line.startswith('%'):
+            # File metadata - skip
             continue
         elif line.startswith('/*'):
-            # Comment line - skip
+            # Comment - skip
             continue
         elif line.startswith('*'):
             # Start of epoch data
-            data_start_line = lines.index(line)
+            data_start_line = i
             break
+    
+    if data_start_line is None:
+        raise ValueError("Could not find start of epoch data (line starting with '*')")
     
     header = SP3Header(
         version=version,
@@ -149,11 +219,12 @@ def _parse_sp3_header(lines: list[str]) -> tuple[SP3Header, int]:
     return header, data_start_line
 
 
-def _parse_sp3_epoch(line: str) -> Time:
+def _parse_sp3_epoch_flexible(line: str) -> Time:
     """
-    Parse epoch time from SP3 epoch header line.
+    Parse epoch time with flexible spacing.
     
-    Format: *  2024 12  1  0  0  0.00000000
+    Format: *  2016  6 16  0  0  0.00000000
+            *  2024  6 16  0  0  0.00000000
     
     Parameters
     ----------
@@ -165,12 +236,24 @@ def _parse_sp3_epoch(line: str) -> Time:
     Time
         Parsed epoch time
     """
-    year = int(line[3:7])
-    month = int(line[7:11])
-    day = int(line[11:13])
-    hour = int(line[13:16])
-    minute = int(line[16:19])
-    second = float(line[19:32])
+    # Split by whitespace for flexibility
+    parts = line.split()
+    
+    try:
+        year = int(parts[1])
+        month = int(parts[2])
+        day = int(parts[3])
+        hour = int(parts[4])
+        minute = int(parts[5])
+        second = float(parts[6])
+    except (IndexError, ValueError):
+        # Fallback to fixed positions
+        year = int(line[3:7].strip())
+        month = int(line[7:11].strip())
+        day = int(line[11:13].strip())
+        hour = int(line[13:16].strip())
+        minute = int(line[16:19].strip())
+        second = float(line[19:32].strip())
     
     return Time(datetime(year, month, day, hour, minute, int(second)) + 
                 timedelta(seconds=second - int(second)))
@@ -178,30 +261,31 @@ def _parse_sp3_epoch(line: str) -> Time:
 
 def _parse_sp3_position_line(line: str) -> tuple[str, np.ndarray, float]:
     """
-    Parse satellite position line from SP3 file.
+    Parse satellite position line.
     
-    Format: PG01  20000000.000  15000000.000  10000000.000    999999.999999
+    Format: PG01  22440.953477  14400.571300  -1297.025565     23.768370
     
-    Parameters
-    ----------
-    line : str
-        Position line
-        
-    Returns
-    -------
-    tuple[str, np.ndarray, float]
-        Satellite ID, position [x, y, z] in km, clock correction in microseconds
+    Works for both old and new formats (same structure).
     """
     sat_id = line[1:4].strip()
-    x = float(line[4:18])  # km
-    y = float(line[18:32])  # km
-    z = float(line[32:46])  # km
-    clock = float(line[46:60])  # microseconds
+    
+    try:
+        x = float(line[4:18].strip())
+        y = float(line[18:32].strip())
+        z = float(line[32:46].strip())
+        clock = float(line[46:60].strip())
+    except ValueError:
+        # Try flexible parsing
+        parts = line[4:].split()
+        x = float(parts[0])
+        y = float(parts[1])
+        z = float(parts[2])
+        clock = float(parts[3]) if len(parts) > 3 else 999999.999999
     
     # Convert to meters
-    position = np.array([x, y, z]) * 1000.0  # km to meters
+    position = np.array([x, y, z]) * 1000.0
     
-    # Convert clock to seconds (999999.999999 indicates no clock data)
+    # Convert clock (999999.999999 = no data)
     if abs(clock - 999999.999999) < 1e-6:
         clock = np.nan
     else:
@@ -212,14 +296,16 @@ def _parse_sp3_position_line(line: str) -> tuple[str, np.ndarray, float]:
 
 def parse_sp3(filepath: Path, include_stds: bool = False) -> SP3Data:
     """
-    Parse an SP3 orbit file.
+    Parse an SP3 orbit file (supports all versions: a, b, c, d).
+    
+    Automatically handles format variations across different eras.
     
     Parameters
     ----------
     filepath : Path
-        Path to SP3 file (can be gzipped)
+        Path to SP3 file (can be gzipped or .Z compressed)
     include_stds : bool, optional
-        Whether to parse position/clock standard deviations, by default False
+        Whether to parse position/clock standard deviations
         
     Returns
     -------
@@ -228,22 +314,34 @@ def parse_sp3(filepath: Path, include_stds: bool = False) -> SP3Data:
         
     Examples
     --------
+    >>> # Modern file
     >>> sp3_data = parse_sp3(Path("GBM0MGXRAP_20243360000_01D_05M_ORB.SP3.gz"))
+    >>> 
+    >>> # Legacy file
+    >>> sp3_data = parse_sp3(Path("gbm19014.sp3.Z"))
+    >>> 
+    >>> # Both work the same way!
     >>> print(sp3_data.header.satellite_ids)
-    ['G01', 'G02', 'G03', ...]
     >>> print(sp3_data.positions['G01'].shape)
-    (288, 3)  # 288 epochs, xyz coordinates
     """
-    # Read file (handle gzip)
+    # Read file (handle gzip and .Z compression)
     if filepath.suffix == '.gz':
         with gzip.open(filepath, 'rt', encoding='utf-8') as f:
             lines = f.readlines()
+    elif filepath.suffix == '.Z':
+        # Unix compress format - decompress first
+        import subprocess
+        result = subprocess.run(['uncompress', '-c', str(filepath)], 
+                              capture_output=True, text=True)
+        if result.returncode != 0:
+            raise ValueError(f"Failed to decompress .Z file: {result.stderr}")
+        lines = result.stdout.split('\n')
     else:
         with open(filepath, 'r', encoding='utf-8') as f:
             lines = f.readlines()
     
-    # Parse header
-    header, data_start = _parse_sp3_header(lines)
+    # Parse header with flexible spacing
+    header, data_start = _parse_sp3_header_flexible(lines)
     
     # Initialize data structures
     times = []
@@ -262,13 +360,13 @@ def parse_sp3(filepath: Path, include_stds: bool = False) -> SP3Data:
     epoch_data_collected = {sat_id: False for sat_id in header.satellite_ids}
     
     for line in lines[data_start:]:
-        if line.startswith('EOF'):
+        if not line.strip() or line.startswith('EOF'):
             break
             
         if line.startswith('*'):
             # New epoch
             if current_epoch is not None:
-                # Fill in NaN for satellites with no data at this epoch
+                # Fill in NaN for satellites with no data
                 for sat_id in header.satellite_ids:
                     if not epoch_data_collected[sat_id]:
                         positions[sat_id].append(np.array([np.nan, np.nan, np.nan]))
@@ -277,12 +375,11 @@ def parse_sp3(filepath: Path, include_stds: bool = False) -> SP3Data:
                             position_stds[sat_id].append(np.array([np.nan, np.nan, np.nan]))
                             clock_stds[sat_id].append(np.nan)
             
-            current_epoch = _parse_sp3_epoch(line)
+            current_epoch = _parse_sp3_epoch_flexible(line)
             times.append(current_epoch)
             epoch_data_collected = {sat_id: False for sat_id in header.satellite_ids}
             
         elif line.startswith('P') or line.startswith('V'):
-            # Position (or velocity) line
             if line.startswith('P'):
                 sat_id, position, clock = _parse_sp3_position_line(line)
                 
@@ -292,8 +389,6 @@ def parse_sp3(filepath: Path, include_stds: bool = False) -> SP3Data:
                     epoch_data_collected[sat_id] = True
                     
                     if include_stds:
-                        # Standard deviations would be on following lines
-                        # Not implemented yet - set to NaN
                         position_stds[sat_id].append(np.array([np.nan, np.nan, np.nan]))
                         clock_stds[sat_id].append(np.nan)
     

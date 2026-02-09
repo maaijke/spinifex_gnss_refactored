@@ -45,6 +45,45 @@ GNSS_OBS_PRIORITY = {
         "L2": ["L2L", "L2X"],
     },
 }
+# ============================================================================
+# RINEX2 Observation Code Priorities (Legacy format)
+# ============================================================================
+
+GNSS_OBS_PRIORITY_RINEX2 = {
+    "G": {  # GPS
+        "C1": ["P1", "C1"],  # P(Y)-code preferred, C/A fallback
+        "C2": ["P2"],         # P(Y)-code on L2 (required, no C/A on L2)
+        "L1": ["L1"],         # L1 carrier phase
+        "L2": ["L2"],         # L2 carrier phase
+    },
+    "R": {  # GLONASS
+        "C1": ["P1", "C1"],  # Same structure as GPS
+        "C2": ["P2"],
+        "L1": ["L1"],
+        "L2": ["L2"],
+    },
+    "E": {  # Galileo (limited support in RINEX2)
+        "C1": ["C1"],        # E1 pseudorange
+        "C2": ["C5", "C7"],  # E5a or E5b
+        "L1": ["L1"],        # E1 carrier phase
+        "L2": ["L5", "L7"],  # E5a or E5b phase
+    },
+    "C": {  # BeiDou (very limited support in RINEX2)
+        # WARNING: BeiDou labels in RINEX2 are confusing!
+        # "C2" means B1, not GPS L2!
+        "C1": ["C2"],        # B1 pseudorange (confusing label)
+        "C2": ["C7", "C6"],  # B2 or B3 pseudorange
+        "L1": ["L2"],        # B1 carrier phase (confusing label)
+        "L2": ["L7", "L6"],  # B2 or B3 phase
+    },
+    "J": {  # QZSS (rare in RINEX2)
+        "C1": ["C1"],
+        "C2": ["C2", "C5"],
+        "L1": ["L1"],
+        "L2": ["L2", "L5"],
+    },
+}
+
 
 # ============================================================================
 # GNSS Processing Constants
