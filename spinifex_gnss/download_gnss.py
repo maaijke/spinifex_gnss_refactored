@@ -585,7 +585,7 @@ async def download_rinex_coro(
     ]
     
     # Get directory listings
-    print("checking local files for {date.date()}")
+    print(f"checking local files for {date.date()}")
     stations_missing, urls = check_local_rinex_files(stations, date, datapath)
     if len(stations_missing):
         print(f"Checking RINEX3 servers for {date.date()}...")

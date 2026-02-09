@@ -90,7 +90,7 @@ GNSS_OBS_PRIORITY_RINEX2 = {
 # ============================================================================
 
 # Distance threshold for selecting GNSS stations (in km)
-DISTANCE_KM_CUT = 100
+DISTANCE_KM_CUT = 200
 
 # Number of distance points for interpolation
 NDIST_POINTS = 300
