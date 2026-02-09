@@ -38,6 +38,178 @@ def get_gps_week(date: datetime) -> tuple[int, int]:
     gpstime = gps_time.GPSTime.from_datetime(date)
     return gpstime.week_number, int(gpstime.time_of_week / (24 * 3600))
 
+def _build_sp3_filenames(date: datetime) -> list[str]:
+    """
+    Build list of possible SP3 filenames for a given date.
+    
+    SP3 filename evolution:
+    
+    1. Modern (2020+): GBM0MGXRAP_YYYYDDD0000_01D_05M_ORB.SP3.gz
+       Example: GBM0MGXRAP_20241700000_01D_05M_ORB.SP3.gz
+       
+    2. Intermediate (2015-2020): gbmYYYYD.sp3.Z or gbmWWWWD.sp3.Z
+       Example: gbm19010.sp3.Z (2019, DOY 010)
+       Example: gbm20010.sp3.Z (GPS week 2001, DOY 0)
+       
+    3. Legacy (<2015): gbmWWWWD.sp3.Z (week + DOY)
+       Example: gbm17650.sp3.Z (GPS week 1765, DOY 0)
+    
+    Parameters
+    ----------
+    date : datetime
+        Date for which to build filenames
+        
+    Returns
+    -------
+    list[str]
+        List of possible filenames, ordered by likelihood
+    """
+    year = date.year
+    yy = year % 100  # 2-digit year
+    doy = date.timetuple().tm_yday
+    gps_week, gps_dow = get_gps_week(date)
+    
+    filenames = []
+    
+    # Format 1: Modern RINEX3-style (2020+)
+    filenames.append(f"GBM0MGXRAP_{year}{doy:03d}0000_01D_05M_ORB.SP3.gz")
+    
+    # Format 2: Intermediate with 4-digit year (2015-2020)
+    # Format: gbmYYDDD.sp3.Z where YY is last 2 digits of year
+    filenames.append(f"gbm{yy}{doy:03d}0.sp3.Z")
+    filenames.append(f"gbm{yy:02d}{doy:03d}0.sp3.gz")
+    filenames.append(f"gbm{yy:02d}{doy:03d}0.sp3")
+    
+    # Format 3: GPS week-based (older, can appear in any era)
+    # Format: gbmWWWWD.sp3.Z where WWWW is GPS week, D is day of week
+    filenames.append(f"gbm{gps_week:04d}{gps_dow}.sp3.Z")
+    filenames.append(f"gbm{gps_week:04d}{gps_dow}.sp3.gz")
+    filenames.append(f"gbm{gps_week:04d}{gps_dow}.sp3")
+    
+    # Format 4: Alternative week-based formats
+    filenames.append(f"GBM{gps_week:04d}{gps_dow}.sp3.Z")
+    filenames.append(f"GBM{gps_week:04d}{gps_dow}.SP3.Z")
+    
+    # Format 5: Year-DOY without leading zero on day
+    filenames.append(f"gbm{yy:02d}{doy:03d}.sp3.Z")
+    
+    return filenames
+
+
+def _build_sp3_directory_paths(date: datetime, base_url: str) -> list[str]:
+    """
+    Build list of possible directory paths for SP3 files.
+    
+    Directory structure has also evolved:
+    
+    1. Modern (2022+): {gpsweek}_IGS20/
+       Example: 2318_IGS20/
+       
+    2. Intermediate (2015-2022): {gpsweek}/
+       Example: 2095/
+       
+    3. Legacy (<2015): Multiple possible structures
+       - {gpsweek}/
+       - {year}/{doy}/
+       - repro2/{gpsweek}/ (reprocessed products)
+    
+    Parameters
+    ----------
+    date : datetime
+        Target date
+    base_url : str
+        Base URL for MGEX products
+        
+    Returns
+    -------
+    list[str]
+        List of directory URLs to try
+    """
+    gps_week, _ = get_gps_week(date)
+    year = date.year
+    doy = date.timetuple().tm_yday
+    
+    paths = []
+    
+    # IGS20 reference frame (2022+)
+    if gps_week >= 2238:
+        paths.append(f"{base_url}{gps_week}_IGS20/")
+    
+    # Standard week-based directory
+    paths.append(f"{base_url}{gps_week}/")
+    
+    # Reprocessed products (often in separate directory)
+    paths.append(f"{base_url}repro2/{gps_week}/")
+    paths.append(f"{base_url}repro3/{gps_week}/")
+    
+    # Year/DOY structure (some servers use this)
+    paths.append(f"{base_url}{year}/{doy:03d}/")
+    
+    return paths
+
+
+async def _download_sp3_file_with_fallback(
+    date: datetime,
+    base_url: str,
+    datapath: Path
+) -> Path:
+    """
+    Download SP3 file for a specific date with comprehensive fallback.
+    
+    Tries multiple combinations of:
+    - Directory paths (modern, intermediate, legacy)
+    - Filename formats (modern, intermediate, legacy)
+    - Compression formats (.gz, .Z, uncompressed)
+    
+    Parameters
+    ----------
+    date : datetime
+        Target date
+    base_url : str
+        Base URL for GNSS products
+    datapath : Path
+        Output directory
+        
+    Returns
+    -------
+    Path
+        Path to downloaded file
+        
+    Raises
+    ------
+    Exception
+        If file cannot be found in any format
+    """
+    # Build all possible directory paths
+    directory_paths = _build_sp3_directory_paths(date, base_url)
+    
+    # Build all possible filenames
+    filenames = _build_sp3_filenames(date)
+    
+    # Try all combinations
+    errors = []
+    
+    for dir_path in directory_paths:
+        for filename in filenames:
+            url = f"{dir_path}{filename}"
+            
+            try:
+                print(f"  Trying: {url}")
+                file = await download_or_copy_url(url, output_directory=datapath)
+                print(f"  ✓ Downloaded: {filename}")
+                return file
+            except Exception as e:
+                errors.append(f"{url}: {e}")
+                continue
+    
+    # If we get here, nothing worked
+    raise Exception(
+        f"Failed to download SP3 for {date.date()} after trying "
+        f"{len(directory_paths) * len(filenames)} combinations.\n"
+        f"Tried directories: {directory_paths[:3]}...\n"
+        f"Tried filenames: {filenames[:3]}..."
+    )
+
 
 async def _download_satpos_files_coro(
     date: datetime,
@@ -47,8 +219,8 @@ async def _download_satpos_files_coro(
     """
     Download SP3 satellite orbit files for date ± 1 day.
     
-    Handles both modern (with _IGS20 suffix) and older (without suffix) paths.
-    IGS20 reference frame was adopted around week 2238 (late 2022).
+    Handles multiple SP3 filename and directory formats with comprehensive
+    fallback logic for historical data support.
     
     Parameters
     ----------
@@ -66,76 +238,43 @@ async def _download_satpos_files_coro(
         
     Notes
     -----
-    Directory structure changed around GPS week 2238 (Nov 2022):
-    - New: {gpsweek}_IGS20/ (IGS20 reference frame)
-    - Old: {gpsweek}/ (no suffix)
+    SP3 format evolution:
     
-    The function tries the modern path first, then falls back to legacy path.
+    Modern (2020+):
+    - Filename: GBM0MGXRAP_YYYYDDD0000_01D_05M_ORB.SP3.gz
+    - Directory: {gpsweek}_IGS20/ (if week >= 2238) or {gpsweek}/
+    - Compression: .gz
+    
+    Intermediate (2015-2020):
+    - Filename: gbmYYDDD0.sp3.Z or gbmWWWWD.sp3.Z
+    - Directory: {gpsweek}/
+    - Compression: .Z (Unix compress)
+    
+    Legacy (<2015):
+    - Filename: gbmWWWWD.sp3.Z
+    - Directory: {gpsweek}/ or repro2/{gpsweek}/
+    - Compression: .Z
+    
+    The function tries all possible combinations automatically.
     """
-    sp3_names = []
-    
     yesterday = date - timedelta(days=1)
     tomorrow = date + timedelta(days=1)
     
-    yesterweek, _ = get_gps_week(yesterday)
-    gpsweek, _ = get_gps_week(date)
-    tomorrowweek, _ = get_gps_week(tomorrow)
+    print(f"\nDownloading SP3 files for {date.date()} ± 1 day...")
     
-    # IGS20 reference frame introduced around GPS week 2238 (late 2022)
-    # For older data, use path without _IGS20 suffix
-    igs20_week_threshold = 2238
+    # Download files for all three days
+    files = []
     
-    # Helper function to build SP3 URL with fallback
-    def build_sp3_url(week: int, date_obj: datetime) -> str:
-        """Build SP3 URL with _IGS20 suffix if recent, otherwise without."""
-        doy = date_obj.timetuple().tm_yday
-        year = date_obj.year
-        filename = f"GBM0MGXRAP_{year}{doy:03d}0000_01D_05M_ORB.SP3.gz"
-        
-        if week >= igs20_week_threshold:
-            # Modern path with _IGS20
-            return f"{url}{week}_IGS20/{filename}"
-        else:
-            # Legacy path without suffix
-            return f"{url}{week}/{filename}"
-    
-    sp3_names.append(build_sp3_url(yesterweek, yesterday))
-    sp3_names.append(build_sp3_url(gpsweek, date))
-    sp3_names.append(build_sp3_url(tomorrowweek, tomorrow))
-    
-    # Try to download with fallback
-    downloaded_files = []
-    
-    for sp3_url in sp3_names:
+    for day_date, day_name in [(yesterday, "yesterday"), (date, "today"), (tomorrow, "tomorrow")]:
+        print(f"\n{day_name.capitalize()} ({day_date.date()}):")
         try:
-            # Try primary URL
-            file = await download_or_copy_url(sp3_url, output_directory=datapath)
-            downloaded_files.append(file)
+            file = await _download_sp3_file_with_fallback(day_date, url, datapath)
+            files.append(file)
         except Exception as e:
-            # If modern path failed, try legacy path (or vice versa)
-            print(f"Failed to download {sp3_url}: {e}")
-            
-            # Extract week and filename from URL
-            if "_IGS20/" in sp3_url:
-                # Try without _IGS20
-                fallback_url = sp3_url.replace("_IGS20/", "/")
-                print(f"  Trying fallback: {fallback_url}")
-            else:
-                # Try with _IGS20
-                # Extract week number from URL
-                week_match = sp3_url.split("/")[-2]  # Get directory part
-                fallback_url = sp3_url.replace(f"/{week_match}/", f"/{week_match}_IGS20/")
-                print(f"  Trying fallback: {fallback_url}")
-            
-            try:
-                file = await download_or_copy_url(fallback_url, output_directory=datapath)
-                downloaded_files.append(file)
-                print(f"  ✓ Downloaded from fallback URL")
-            except Exception as e2:
-                print(f"  ✗ Fallback also failed: {e2}")
-                raise Exception(f"Failed to download SP3 file from both primary and fallback URLs")
+            print(f"  ✗ Failed: {e}")
+            raise
     
-    return downloaded_files
+    return files
 
 
 def download_satpos_files(
@@ -144,23 +283,46 @@ def download_satpos_files(
     datapath: Path = Path("../../GPS/data/"),
 ) -> list[Path]:
     """
-    Download SP3 satellite position files for date ± 1 day.
+    Download SP3 satellite position files for date ± 1 day (sync wrapper).
+    
+    Automatically handles multiple SP3 file formats across different eras.
     
     Parameters
     ----------
     date : datetime
         Target date
     url : str, optional
-        Server URL
+        Server URL for GNSS products
     datapath : Path, optional
         Output directory
         
     Returns
     -------
     list[Path]
-        Paths to 3 SP3 files
+        Paths to 3 SP3 files (sorted: yesterday, today, tomorrow)
+        
+    Examples
+    --------
+    >>> from datetime import datetime
+    >>> 
+    >>> # Modern data (2024)
+    >>> date = datetime(2024, 6, 18)
+    >>> sp3_files = download_satpos_files(date)
+    >>> # Downloads: GBM0MGXRAP_2024170*.SP3.gz
+    >>> 
+    >>> # Intermediate data (2018)
+    >>> date = datetime(2018, 3, 15)
+    >>> sp3_files = download_satpos_files(date)
+    >>> # Downloads: gbm18074*.sp3.Z or gbm1987*.sp3.Z
+    >>> 
+    >>> # Legacy data (2012)
+    >>> date = datetime(2012, 1, 10)
+    >>> sp3_files = download_satpos_files(date)
+    >>> # Downloads: gbm1668*.sp3.Z
     """
     return _download_satpos_files(date, url, datapath)
+
+
 
 
 def check_url(url_list: list[str]) -> set[str]:
