@@ -679,6 +679,7 @@ def get_ipp_density(
     n_time_slots: int = 1,
     max_time_diff_min: float = 2.5,
     use_time_weighting: bool = False,
+    max_workers: int = MAX_WORKERS_DENSITY
 ) -> tec_data.ElectronDensity:
     """
     Calculate electron density with optional time averaging.
@@ -735,7 +736,7 @@ def get_ipp_density(
     all_data = [[[] for _ in range(Nheights)] for _ in range(Ntimes)]
     
     # Process stations in parallel
-    with ProcessPoolExecutor(max_workers=MAX_WORKERS_DENSITY) as executor:
+    with ProcessPoolExecutor(max_workers=max_workers) as executor:
         future_to_station = {
             executor.submit(
                 get_gnss_station_density,

@@ -52,9 +52,9 @@ GNSS_OBS_PRIORITY = {
 GNSS_OBS_PRIORITY_RINEX2 = {
     "G": {  # GPS
         "C1": ["P1", "C1"],  # P(Y)-code preferred, C/A fallback
-        "C2": ["P2"],         # P(Y)-code on L2 (required, no C/A on L2)
-        "L1": ["L1"],         # L1 carrier phase
-        "L2": ["L2"],         # L2 carrier phase
+        "C2": ["P2"],  # P(Y)-code on L2 (required, no C/A on L2)
+        "L1": ["L1"],  # L1 carrier phase
+        "L2": ["L2"],  # L2 carrier phase
     },
     "R": {  # GLONASS
         "C1": ["P1", "C1"],  # Same structure as GPS
@@ -63,17 +63,17 @@ GNSS_OBS_PRIORITY_RINEX2 = {
         "L2": ["L2"],
     },
     "E": {  # Galileo (limited support in RINEX2)
-        "C1": ["C1"],        # E1 pseudorange
+        "C1": ["C1"],  # E1 pseudorange
         "C2": ["C5", "C7"],  # E5a or E5b
-        "L1": ["L1"],        # E1 carrier phase
+        "L1": ["L1"],  # E1 carrier phase
         "L2": ["L5", "L7"],  # E5a or E5b phase
     },
     "C": {  # BeiDou (very limited support in RINEX2)
         # WARNING: BeiDou labels in RINEX2 are confusing!
         # "C2" means B1, not GPS L2!
-        "C1": ["C2"],        # B1 pseudorange (confusing label)
+        "C1": ["C2"],  # B1 pseudorange (confusing label)
         "C2": ["C7", "C6"],  # B2 or B3 pseudorange
-        "L1": ["L2"],        # B1 carrier phase (confusing label)
+        "L1": ["L2"],  # B1 carrier phase (confusing label)
         "L2": ["L7", "L6"],  # B2 or B3 phase
     },
     "J": {  # QZSS (rare in RINEX2)
@@ -134,7 +134,7 @@ FREQ = {
     },
     "E": {  # Galileo
         "f1": 1575.42e6,  # E1 frequency
-        "f2": 1191.795e6,  # E5 frequency
+        "f2": 1176.45e6,  # E5 frequency
     },
     "C": {  # BeiDou
         "f1": 1561.098e6,  # B1 frequency
@@ -216,19 +216,19 @@ RINEX_FILE_PATTERN = "{station}_R_{year}{doy:03d}0000_01D_30S_MO.crx.gz"
 def get_tec_coefficient(constellation: str) -> float:
     """
     Calculate the TEC coefficient for a given constellation.
-    
+
     The coefficient is: 1e-16 / (40.3 * (1/f1^2 - 1/f2^2))
-    
+
     Parameters
     ----------
     constellation : str
         Constellation identifier ('G', 'R', 'E', 'C', 'J')
-        
+
     Returns
     -------
     float
         TEC coefficient for the constellation
-        
+
     Raises
     ------
     KeyError
@@ -236,8 +236,8 @@ def get_tec_coefficient(constellation: str) -> float:
     """
     if constellation not in FREQ:
         raise KeyError(f"Unknown constellation: {constellation}")
-        
+
     f1 = FREQ[constellation]["f1"]
     f2 = FREQ[constellation]["f2"]
-    
+
     return 1e-16 / (40.3 * (1.0 / f1**2 - 1.0 / f2**2))

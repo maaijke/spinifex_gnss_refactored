@@ -335,7 +335,8 @@ def get_electron_density_gnss(
             ionex=ionex,  # Pass IONEX data!
             n_time_slots=n_time_slots,
             max_time_diff_min=max_time_diff_min,
-            use_time_weighting=use_time_weighting
+            use_time_weighting=use_time_weighting,
+            max_workers=max_workers,
         )
         
         all_data.append(day_density)
