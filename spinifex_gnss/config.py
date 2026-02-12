@@ -96,7 +96,7 @@ DISTANCE_KM_CUT = 200
 NDIST_POINTS = 300
 
 # Minimum elevation angle for satellite observations (in degrees)
-ELEVATION_CUT = 20
+ELEVATION_CUT = 25
 
 # Interpolation order for spatial interpolation
 INTERPOLATION_ORDER = 3
@@ -174,7 +174,7 @@ DEFAULT_DATA_PATH = "../../GPS/data/"
 # This is calculated dynamically based on constellation frequencies
 
 # Cycle slip detection threshold (multiple of median difference)
-CYCLE_SLIP_THRESHOLD = 5.0
+CYCLE_SLIP_THRESHOLD = 15.0
 
 # ============================================================================
 # Parallel Processing Configuration
