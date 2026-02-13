@@ -589,6 +589,7 @@ def get_gnss_station_density(
     
     for prn in prns:
         try:
+            tec_coeff=None
             sat_data = gnss_data.gnss[prn]
             if not gnss_data.tec_coefficients is None:
                 if prn in gnss_data.tec_coefficients:
