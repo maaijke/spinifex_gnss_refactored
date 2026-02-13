@@ -68,7 +68,7 @@ def getphase_tec(
 
 
 def _get_cycle_slips(
-    phase_tec: np.ndarray, threshold_factor: float = CYCLE_SLIP_THRESHOLD
+    phase_tec: np.ndarray, threshold_factor: float = CYCLE_SLIP_THRESHOLD, max_gap_points:int=2
 ) -> np.ndarray:
     """
     Detect cycle slips in carrier phase TEC.
@@ -92,10 +92,34 @@ def _get_cycle_slips(
     # double_diff = np.abs(diff)
     threshold = threshold_factor * np.nanmedian(triple_diff)
     slips = triple_diff > threshold
-    gaps = np.isnan(phase_tec)
-    gap_starts = np.diff(gaps, prepend=0) > 0
-    segment_breaks = np.logical_or(slips, gap_starts)
+
+    # Detect data gaps
+    is_nan = np.isnan(phase_tec)   
+    # Count consecutive NaNs
+    gap_lengths = np.zeros(len(phase_tec), dtype=int)
+    consecutive_nan = 0
+    
+    for i in range(len(phase_tec)):
+        if is_nan[i]:
+            consecutive_nan += 1
+            gap_lengths[i] = consecutive_nan
+        else:
+            # Check if we just ended a gap
+            if i > 0 and is_nan[i-1]:
+                # Mark the position after gap with the gap length
+                gap_lengths[i] = consecutive_nan
+            consecutive_nan = 0
+    
+    # Start new segment only if gap is LARGER than max_gap_points
+    large_gap = gap_lengths > max_gap_points
+    
+    # Combine: new segment starts on cycle slip OR large gap
+    segment_breaks = slips | large_gap
+    
+    # Create segment IDs
     return np.cumsum(segment_breaks.astype(int))
+    
+
 
 
 def _get_phase_corrected(
