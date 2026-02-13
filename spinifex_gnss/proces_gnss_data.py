@@ -590,10 +590,14 @@ def get_gnss_station_density(
     for prn in prns:
         try:
             sat_data = gnss_data.gnss[prn]
+            if not gnss_data.tec_coefficients is None:
+                if prn in gnss_data.tec_coefficients:
+                    tec_coeff = gnss_data.tec_coefficients[prn]
             transmission_time = get_transmission_time(sat_data[:, 1], gnss_data.times)
             phase_stec = getphase_tec(
                 sat_data[:, 2], sat_data[:, 3],
-                constellation=gnss_data.constellation
+                constellation=gnss_data.constellation,
+                tec_coefficient=tec_coeff
             )
             sat_pos = get_sat_pos(sp3_data, transmission_time, prn)
             ipp_sat_stat.append(

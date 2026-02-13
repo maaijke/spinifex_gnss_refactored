@@ -8,6 +8,7 @@ from astropy.time import Time
 class RinexHeader(NamedTuple):
     version: str
     datatypes: dict[str, list[str]]
+    glonass_channels: dict[int, int]  # slot_number -> frequency_channel (k)
 
 
 class RinexData(NamedTuple):
@@ -16,7 +17,7 @@ class RinexData(NamedTuple):
     header: RinexHeader
 
 
-def _read_rinex_header(raw_rinex_lines: list[str])-> RinexHeader:
+def _read_rinex_header(raw_rinex_lines: list[str]) -> RinexHeader:
     """Read header information from rinex 3 file
 
     Parameters
@@ -27,15 +28,23 @@ def _read_rinex_header(raw_rinex_lines: list[str])-> RinexHeader:
     Returns
     -------
     RinexHeader
-        object with rinex version and datatypes 
-    """    
+        object with rinex version and datatypes
+    """
     version = ""
     obs_map = {}
+    glonass_channels = {}
     sys = ""
     for line_number, line in enumerate(raw_rinex_lines):
         type = line[60:81]
         if "END OF HEADER" in type:
-            return RinexHeader(version=version, datatypes=obs_map), line_number
+            return (
+                RinexHeader(
+                    version=version,
+                    datatypes=obs_map,
+                    glonass_channels=glonass_channels,
+                ),
+                line_number,
+            )
         else:
             if "RINEX VERSION / TYPE" in type:
                 version = line[:61].strip()
@@ -52,29 +61,48 @@ def _read_rinex_header(raw_rinex_lines: list[str])-> RinexHeader:
                 continue
             obs_map[sys] = types
             sys = ""
+        # Parse GLONASS frequency channels
+        if "GLONASS SLOT / FRQ #" in type:
+            # Format: slot_num freq_channel pairs
+            # Example: " 1 -4  2 -3  3  2  4 -6  5  1  6 -2  7  5  8  6"
+            # Each pair is: slot_number (2 chars) frequency_channel (3 chars)
+            data = line[4:60].strip()
+            # Split into pairs (slot, channel)
+            tokens = data.split()
+            for i in range(0, len(tokens), 2):
+                if i + 1 < len(tokens):
+                    try:
+                        slot = tokens[i]
+                        if not 'R' in slot:
+                            slot = f"R{int(slot):02d}"
+                        channel = int(tokens[i + 1])
+                        glonass_channels[slot] = channel
+                    except ValueError:
+                        # Skip invalid entries
+                        continue
     return None, None
 
 
-def get_rinex_data(fname: Path)->RinexData:
+def get_rinex_data(fname: Path) -> RinexData:
     """parse rinex3 file
 
     Parameters
     ----------
     fname : Path
-        path to the file, assumed hatanaka (+optional gzip) compressed 
+        path to the file, assumed hatanaka (+optional gzip) compressed
 
     Returns
     -------
     RinexData
-        object with data, times (gpstime) and header 
-    """    
+        object with data, times (gpstime) and header
+    """
     rinex_lines = hatanaka.decompress(fname).decode().split("\n")
     header, end_of_header = _read_rinex_header(rinex_lines)
     cur_time = None
     all_times = []
     data = {}
     width = 16
-    no_cur_time=True
+    no_cur_time = True
     for line in rinex_lines[end_of_header:]:
         if line.startswith(">"):  # epoch record (RINEX 3)
             try:
@@ -91,7 +119,7 @@ def get_rinex_data(fname: Path)->RinexData:
                 no_cur_time = True
                 continue
         if no_cur_time:
-            continue #continue reading until we find a correct time 
+            continue  # continue reading until we find a correct time
         sat_id = line[:3].strip()
         if not sat_id:
             continue
@@ -120,4 +148,4 @@ def get_rinex_data(fname: Path)->RinexData:
     return RinexData(header=header, times=Time(all_times, format="mjd"), data=newdata)
 
 
-#TODO: add RNX2 parser
+# TODO: add RNX2 parser

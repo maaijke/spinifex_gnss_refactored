@@ -26,12 +26,12 @@ GNSS_OBS_PRIORITY = {
         "L1": ["L1C", "L1X"],
         "L2": ["L5Q", "L5X", "L7Q", "L7X"],
     },
-#    "R": {  # GLONASS         #quick fix, remove glonass because of different frequencies
-#        "C1": ["C1P", "C1C"],
-#        "C2": ["C2P", "C2C"],   
-#        "L1": ["L1P", "L1C"],
-#        "L2": ["L2P", "L2C"],
-#    },
+    "R": {  # GLONASS         #quick fix, remove glonass because of different frequencies
+       "C1": ["C1P", "C1C"],
+       "C2": ["C2P", "C2C"],   
+       "L1": ["L1P", "L1C"],
+       "L2": ["L2P", "L2C"],
+    },
     "C": {  # BeiDou
         "C1": ["C2I", "C2Q", "C2X"],
         "C2": ["C7I", "C7Q", "C7X", "C6I"],
@@ -56,12 +56,12 @@ GNSS_OBS_PRIORITY_RINEX2 = {
         "L1": ["L1"],  # L1 carrier phase
         "L2": ["L2"],  # L2 carrier phase
     },
-    "R": {  # GLONASS
-        "C1": ["P1", "C1"],  # Same structure as GPS
-        "C2": ["P2"],
-        "L1": ["L1"],
-        "L2": ["L2"],
-    },
+    #"R": {  # GLONASS   # Ignore Glonass RX2 for now untill we understand the stucture 
+    #    "C1": ["P1", "C1"],  # Same structure as GPS
+    #    "C2": ["P2"],
+    #    "L1": ["L1"],
+    #    "L2": ["L2"],
+    #},
     "E": {  # Galileo (limited support in RINEX2)
         "C1": ["C1"],  # E1 pseudorange
         "C2": ["C5", "C7"],  # E5a or E5b
@@ -129,8 +129,8 @@ FREQ = {
         "f2": 1227.60e6,  # L2 frequency
     },
     "R": {  # GLONASS (nominal frequencies; actual frequencies vary by slot)
-        "f1": 1602.00e6 + 9 * 0.5625e6,
-        "f2": 1246.00e6 + 9 * 0.4375e6,
+        "f1": 1602.00e6, #+ 9 * 0.5625e6, 
+        "f2": 1246.00e6, #+ 9 * 0.4375e6,
     },
     "E": {  # Galileo
         "f1": 1575.42e6,  # E1 frequency
