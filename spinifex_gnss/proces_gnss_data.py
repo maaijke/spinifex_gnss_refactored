@@ -605,7 +605,7 @@ def get_gnss_station_density(
                 get_stat_sat_ipp(
                     satpos=sat_pos,
                     gnsspos=gnss_pos_dict[gnss_data.station],
-                    times=gnss_data.times,
+                    times=transmission_time,
                     height_array=ipp_target.loc[0].height,
                 )
             )
