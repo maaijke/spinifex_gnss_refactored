@@ -236,4 +236,4 @@ def get_tec_coefficient(constellation: str) -> float:
     f1 = FREQ[constellation]["f1"]
     f2 = FREQ[constellation]["f2"]
 
-    return 1e-16 / (40.3 * (1.0 / f1**2 - 1.0 / f2**2))
+    return 1e-16 / (40.3 * (1.0 / f2**2 - 1.0 / f1**2))

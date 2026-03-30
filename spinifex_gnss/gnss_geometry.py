@@ -13,7 +13,7 @@ from spinifex.geometry import IPP, get_ipp_from_itrs
 from pathlib import Path
 from scipy.interpolate import CubicSpline
 from typing import Literal
-from spinifex_gnss.parse_sp3 import parse_sp3, concatenate_sp3_files, SP3Data
+from spinifex_gnss.parse_sp3 import concatenate_sp3_files, SP3Data
 
 
 def _convert_ipp_lonlatr_to_xyz(ipp: IPP) -> np.ndarray[float]:

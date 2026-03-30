@@ -22,7 +22,8 @@ from spinifex.geometry import IPP, R_EARTH_MEAN
 from spinifex.ionospheric import tec_data
 from spinifex.ionospheric.ionex_manipulation import interpolate_ionex, IonexData
 from spinifex.ionospheric.iri_density import get_profile
-
+from spinifex_gnss.parse_dcb import DCBData, get_satellite_dcb, get_receiver_dcb_c1c2
+from spinifex_gnss.parse_sp3 import SP3Data
 from spinifex_gnss.parse_gnss import GNSSData
 from spinifex_gnss.gnss_geometry import (
     get_sat_pos,
@@ -30,7 +31,12 @@ from spinifex_gnss.gnss_geometry import (
     _convert_ipp_lonlatr_to_xyz,
 )
 from spinifex_gnss.gnss_stations import gnss_pos_dict
-from spinifex_gnss.tec_core import getphase_tec, get_transmission_time, _get_cycle_slips
+from spinifex_gnss.tec_core import (
+    getphase_tec,
+    get_transmission_time,
+    get_cycle_slips,
+    getpseudorange_tec,
+)
 from spinifex_gnss.config import (
     DISTANCE_KM_CUT,
     NDIST_POINTS,
@@ -49,6 +55,67 @@ def _get_distance_km(loc1: u.Quantity, loc2: u.Quantity) -> np.ndarray:
     """Calculate distance between two sets of locations in km."""
 
     return np.linalg.norm(loc1.to(u.km).value - loc2.to(u.km).value, axis=-1)
+
+
+def _get_phase_corrected_with_dcb(
+    phase_tec: np.ndarray,
+    c1: np.ndarray,
+    c2: np.ndarray,
+    constellation: str = "G",
+    tec_coefficient: tuple = None,
+    satellite_dcb_ns: float = None,
+    receiver_dcb_ns: float = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Remove phase bias using DCB-corrected pseudorange TEC.
+
+    Parameters
+    ----------
+    phase_tec : np.ndarray
+        STEC from carrier phases (has bias)
+    c1 : np.ndarray
+        Pseudorange for frequency f1
+    c2 : np.ndarray
+        Pseudorange for frequency f2
+    constellation : str
+        Satellite constellation
+    tec_coefficient : tuple
+        (C12, f1, f2) for GLONASS FDMA
+    satellite_dcb_ns : float
+        Satellite DCB in nanoseconds
+    receiver_dcb_ns : float
+        Receiver DCB in nanoseconds
+
+    Returns
+    -------
+    tuple[np.ndarray, np.ndarray]
+        - Bias-corrected phase TEC
+        - Standard deviation of bias estimate per segment
+    """
+    # Calculate DCB-corrected pseudorange TEC
+    pseudo_tec = getpseudorange_tec(
+        c1=c1,
+        c2=c2,
+        constellation=constellation,
+        tec_coefficient=tec_coefficient,
+        satellite_dcb_ns=satellite_dcb_ns,
+        receiver_dcb_ns=receiver_dcb_ns,
+    )
+
+    # Detect cycle slips
+    cycle_slips = get_cycle_slips(phase_tec)
+    phase_bias = np.zeros_like(phase_tec)
+    phase_std = np.zeros_like(phase_tec)
+
+    # Align phase to DCB-corrected pseudorange per segment
+    for seg in np.unique(cycle_slips):
+        seg_idx = np.nonzero(cycle_slips == seg)[0]
+        bias = np.nanmean(pseudo_tec[seg_idx] - phase_tec[seg_idx])
+        std = np.nanstd(pseudo_tec[seg_idx] - phase_tec[seg_idx])
+        phase_bias[seg_idx] = bias
+        phase_std[seg_idx] = std
+
+    return phase_tec + phase_bias, phase_std
 
 
 def _get_gim_phase_corrected(
@@ -80,7 +147,7 @@ def _get_gim_phase_corrected(
     OPTIMIZATION: Only processes arcs (cycle slip segments) that overlap
     with the extended time window for time averaging.
     """
-    cycle_slips = _get_cycle_slips(phase_tec=phase_tec)
+    cycle_slips = get_cycle_slips(phase_tec=phase_tec)
     phase_bias = np.zeros_like(phase_tec)
     phase_std = np.zeros_like(phase_tec)
 
@@ -604,6 +671,7 @@ def get_gnss_station_density(
     profiles: np.ndarray,
     sp3_data,
     ionex: IonexData,
+    dcb_data: DCBData | None = None,
     n_time_slots: int = 1,
     max_time_diff_min: float = 2.5,
     use_time_weighting: bool = False,
@@ -623,6 +691,8 @@ def get_gnss_station_density(
         Satellite positions
     ionex : IonexData
         Global ionospheric map
+    dcb_data : DCBData, optional
+        DCB corrections for satellites and receivers
     n_time_slots : int, optional
         Number of time slots to average (1 = nearest neighbor)
     max_time_diff_min : float, optional
@@ -666,13 +736,51 @@ def get_gnss_station_density(
 
             all_time_indices = np.arange(len(gnss_data.times))
 
-            stec_value, stec_error = _get_gim_phase_corrected(
-                phase_stec,
-                ipp_sat_stat[-1],
-                all_time_indices,
-                ionex,
-                max_time_diff_min=max_time_diff_min,
+            # Choose correction method based on DCB availability
+            # Try DCB-based correction first
+            obs1 = gnss_data.c1_str  # e.g., 'C1W', 'C1P', 'C1C'
+            obs2 = gnss_data.c2_str  # e.g., 'C2W', 'C2P', 'C2C'
+
+            # Try to get DCB corrections
+            satellite_dcb_ns = (
+                get_satellite_dcb(dcb_data.satellite_dcb, prn, obs1, obs2)
+                if dcb_data is not None
+                else None
             )
+            receiver_dcb_ns = (
+                get_receiver_dcb_c1c2(
+                    dcb_data.receiver_dcb,
+                    gnss_data.station,
+                    obs1,
+                    obs2,
+                    constellation=gnss_data.constellation,
+                )
+                if dcb_data is not None
+                else None
+            )
+
+            # Check if we have DCB corrections
+            if satellite_dcb_ns is not None and receiver_dcb_ns is not None:
+                # Use DCB-based correction
+                stec_value, stec_error = _get_phase_corrected_with_dcb(
+                    phase_tec=phase_stec,
+                    c1=sat_data[:, 0],
+                    c2=sat_data[:, 1],
+                    constellation=gnss_data.constellation,
+                    tec_coefficient=tec_coeff,
+                    satellite_dcb_ns=satellite_dcb_ns,
+                    receiver_dcb_ns=receiver_dcb_ns,
+                )
+            else:
+                # Fall back to GIM-only correction
+
+                stec_value, stec_error = _get_gim_phase_corrected(
+                    phase_stec,
+                    ipp_sat_stat[-1],
+                    all_time_indices,
+                    ionex,
+                    max_time_diff_min=max_time_diff_min,
+                )
             stec_values.append(stec_value)
             stec_errors.append(stec_error)
         except Exception as e:
@@ -729,8 +837,9 @@ def get_gnss_station_density(
 def get_ipp_density(
     ipp_target: IPP,
     gnss_data_list: list[GNSSData],
-    sp3_data,
+    sp3_data: SP3Data,
     ionex: IonexData,
+    dcb_data: DCBData,
     n_time_slots: int = 1,
     max_time_diff_min: float = 2.5,
     use_time_weighting: bool = False,
@@ -800,6 +909,7 @@ def get_ipp_density(
                 profiles,
                 sp3_data,
                 ionex,
+                dcb_data,
                 n_time_slots,
                 max_time_diff_min,
                 use_time_weighting,

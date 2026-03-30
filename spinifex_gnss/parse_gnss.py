@@ -107,7 +107,7 @@ def calculate_glonass_tec_coefficient(freq_channel: int) -> tuple[float, float, 
 
     # Calculate TEC coefficient
     # C12 = (f1² × f2²) / (40.3e16 × (f1² - f2²))
-    C12 = 1e-16 / (40.3 * (1.0 / f1**2 - 1.0 / f2**2))
+    C12 = 1e-16 / (40.3 * (1.0 / f2**2 - 1.0 / f1**2))
     return C12, f1, f2
 
 

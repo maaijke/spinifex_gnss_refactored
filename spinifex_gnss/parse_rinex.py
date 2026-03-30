@@ -121,7 +121,15 @@ def get_rinex_data(fname: Path) -> RinexData:
                 continue
         if no_cur_time:
             continue  # continue reading until we find a correct time
-        sat_id = line[:3].strip()
+        sat_raw = line[:3]
+        if not sat_raw or not sat_raw[0].isalpha():
+            continue
+        # Normalize: handle 'E 1' -> 'E01', 'G 9' -> 'G09', etc.
+        number_str = sat_raw[1:].strip()
+        if number_str.isdigit():
+            sat_id = f'{sat_raw[0].upper()}{int(number_str):02d}'
+        else:
+            sat_id = sat_raw.strip()
         if not sat_id:
             continue
         n_types = len(header.datatypes[sat_id[:1]])

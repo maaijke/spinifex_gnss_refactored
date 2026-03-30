@@ -22,8 +22,13 @@ from spinifex.times import get_unique_days, get_indexlist_unique_days
 from spinifex.ionospheric.tec_data import ElectronDensity, IonexOptions
 from spinifex.ionospheric.ionex_manipulation import _download_ionex, read_ionex
 
-from spinifex_gnss.download_gnss import download_rinex, download_satpos_files
+from spinifex_gnss.download_gnss import (
+    download_rinex,
+    download_satpos_files,
+    download_dcb_file,
+)
 from spinifex_gnss.parse_gnss import process_all_rinex_parallel
+from spinifex_gnss.parse_dcb import parse_dcb_file, DCBData
 from spinifex_gnss.proces_gnss_data import get_ipp_density
 from spinifex_gnss.gnss_stations import gnss_pos_dict
 from spinifex_gnss.gnss_geometry import get_sp3_data, _convert_ipp_lonlatr_to_xyz
@@ -333,13 +338,19 @@ def get_electron_density_gnss(
             concatenate=True,
         )
 
+        # Download DCB files for bias correction
+        print(f"  Downloading DCB files...")
+        dcb_file = download_dcb_file(date=day.to_datetime(), datapath=data_directory)
+        # parse DCB files
+        dcb_data = parse_dcb_file(dcb_file)
         # Calculate electron density for this day
         print(f"  Calculating electron density...")
         day_density = get_ipp_density(
             gnss_data_list=gnss_data_list,
             ipp_target=selected_ipp,
             sp3_data=sp3_data,
-            ionex=ionex,  # Pass IONEX data!
+            ionex=ionex,
+            dcb_data=dcb_data,
             n_time_slots=n_time_slots,
             max_time_diff_min=max_time_diff_min,
             use_time_weighting=use_time_weighting,

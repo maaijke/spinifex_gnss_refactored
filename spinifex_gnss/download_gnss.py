@@ -22,6 +22,7 @@ import requests
 
 import xml.etree.ElementTree as ET
 
+
 def get_gps_week(date: datetime) -> tuple[int, int]:
     """
     Get GPS week number and day of week from date.
@@ -327,12 +328,10 @@ def download_satpos_files(
     return _download_satpos_files(date, url, datapath)
 
 
-
-
 def check_url(url_list: list[str]) -> set[str]:
     """
     Check URLs and parse directory listings for available files.
-    
+
     Handles both regular HTTP directory listings and S3 buckets.
 
     Parameters
@@ -346,11 +345,11 @@ def check_url(url_list: list[str]) -> set[str]:
         Set of available file URLs
     """
     files = set()
-    
+
     for url in url_list:
         try:
             # Check if this is an S3 bucket (Australian GA)
-            if 's3.amazonaws.com' in url or 's3-' in url:
+            if "s3.amazonaws.com" in url or "s3-" in url:
                 files.update(_check_s3_bucket(url))
             else:
                 # Regular HTTP directory listing
@@ -365,76 +364,77 @@ def check_url(url_list: list[str]) -> set[str]:
 def _check_http_directory(url: str) -> set[str]:
     """
     Parse a regular HTTP directory listing (Apache/nginx style).
-    
+
     Parameters
     ----------
     url : str
         Directory URL
-        
+
     Returns
     -------
     set[str]
         Set of file URLs found
     """
     files = set()
-    
+
     response = requests.get(url, timeout=30)
     response.raise_for_status()
-    
+
     soup = BeautifulSoup(response.text, "html.parser")
-    
+
     for link in soup.find_all("a"):
         href = link.get("href")
         if href and not href.startswith(("?", "/", "http")):
             files.add(f"{url}{href}")
-    
+
     return files
 
 
 def _check_s3_bucket(url: str) -> set[str]:
     """
     Parse an S3 bucket using the S3 ListObjects API.
-    
+
     Parameters
     ----------
     url : str
         S3 URL (e.g., https://bucket.s3.amazonaws.com/index.html#prefix/path/)
-        
+
     Returns
     -------
     set[str]
         Set of file URLs found (matching input URL format)
     """
     files = set()
-    
+
     # Extract bucket name (e.g., ga-gnss-data-rinex-v1)
-    bucket_name = url.split('/')[2].split('.')[0]
-    
+    bucket_name = url.split("/")[2].split(".")[0]
+
     # Check if URL uses index.html# format
-    has_index_html = 'index.html#' in url
-    
+    has_index_html = "index.html#" in url
+
     # Extract prefix
-    if 'prefix=' in url:
-        prefix = url.split('prefix=')[1].split('&')[0]
-    elif '#' in url:
-        prefix = url.split('#')[1]
+    if "prefix=" in url:
+        prefix = url.split("prefix=")[1].split("&")[0]
+    elif "#" in url:
+        prefix = url.split("#")[1]
     else:
         return files
-    
+
     # Call S3 API
     s3_url = f"https://{bucket_name}.s3.amazonaws.com/?list-type=2&prefix={prefix}"
-    
+
     # Use urllib.request like the working code
     import urllib.request
+
     with urllib.request.urlopen(s3_url, timeout=30) as response:
         xml_content = response.read().decode("utf-8")
-    
+
     # Parse XML and extract files
     root = ET.fromstring(xml_content)
-    
+
     # Search for any element with tag ending in 'Key' (handles namespaces)
     for elem in root.iter():
-        if elem.tag.endswith('Key') and elem.text:
+        if elem.tag.endswith("Key") and elem.text:
             file_url = f"https://{bucket_name}.s3.amazonaws.com/{elem.text}"
             files.add(file_url)
     return files
@@ -698,7 +698,7 @@ async def download_rinex_coro(
         rinex3_filenames = _build_rinex3_filenames(station, year, doy)
         for rinex3_filename in rinex3_filenames:
             for url in rinex3_urls:
-                full_url = f"{url}{rinex3_filename}".replace("index.html#","")
+                full_url = f"{url}{rinex3_filename}".replace("index.html#", "")
                 if full_url in rinex3_files:
                     urls.append((full_url, "RINEX3"))
                     found = True
@@ -712,7 +712,7 @@ async def download_rinex_coro(
             rinex2_filenames = _build_rinex2_filenames(station, year, doy)
             for rinex2_filename in rinex2_filenames:
                 for url in rinex2_urls:
-                    full_url = f"{url}{rinex2_filename}".replace("index.html#","")
+                    full_url = f"{url}{rinex2_filename}".replace("index.html#", "")
                     if full_url in rinex2_files:
                         urls.append((full_url, "RINEX2"))
                         found = True
@@ -774,6 +774,237 @@ def download_rinex(
     return _download_rinex(date, stations, datapath)
 
 
+# ============================================================================
+# DCB FILE DOWNLOADING
+# ============================================================================
+
+
+def _build_dcb_filenames(date: datetime) -> list[str]:
+    """
+    Build list of possible DCB filenames for a given date.
+
+    DCB filename format (CAS MGEX):
+    CAS0MGXRAP_YYYYDDD0000_01D_01D_DCB.BSX.gz
+
+    Where:
+    - CAS0 = Chinese Academy of Sciences, version 0
+    - MGXRAP = MGEX Rapid solution
+    - YYYYDDD = year and day-of-year
+    - 0000 = hour and minute (always 0000 for daily)
+    - 01D = 1-day product period
+    - 01D = 1-day sampling interval
+    - DCB = content type (Differential Code Bias)
+    - BSX = BIAS-SINEX format
+    - gz = gzip compression
+
+    Parameters
+    ----------
+    date : datetime
+        Target date
+
+    Returns
+    -------
+    list[str]
+        List of possible DCB filenames to try
+    """
+    year = date.year
+    doy = date.timetuple().tm_yday
+
+    # Primary: CAS rapid solution (most recent, best quality for near-real-time)
+    cas_rapid = f"CAS0MGXRAP_{year}{doy:03d}0000_01D_01D_DCB.BSX.gz"
+
+    # Fallback: CAS final solution
+    cas_final = f"CAS0MGXFIN_{year}{doy:03d}0000_01D_01D_DCB.BSX.gz"
+
+    # DLR alternatives (German Aerospace Center)
+    dlr_rapid = f"DLR0MGXRAP_{year}{doy:03d}0000_01D_01D_DCB.BSX.gz"
+    dlr_final = f"DLR0MGXFIN_{year}{doy:03d}0000_01D_01D_DCB.BSX.gz"
+
+    return [cas_rapid, cas_final, dlr_rapid, dlr_final]
+
+
+def _build_dcb_directory_paths(date: datetime, base_url: str) -> list[str]:
+    """
+    Build list of possible DCB directory paths.
+
+    CDDIS directory structure:
+    - /gnss/products/mgex/dcb/YYYY/
+    - /pub/gps/products/mgex/dcb/YYYY/ (alternative)
+
+    Parameters
+    ----------
+    date : datetime
+        Target date
+    base_url : str
+        Base URL for CDDIS
+
+    Returns
+    -------
+    list[str]
+        List of directory URLs to try
+    """
+    year = date.year
+
+    paths = [
+        f"{base_url}gnss/products/mgex/dcb/{year}/",
+        f"{base_url}pub/gps/products/mgex/dcb/{year}/",
+    ]
+
+    return paths
+
+
+async def _download_dcb_file_with_fallback(
+    date: datetime,
+    base_url: str = "https://cddis.nasa.gov/archive/",
+    datapath: Path = Path("../../GPS/data/"),
+) -> Path:
+    """
+    Download DCB file for a given date with fallback options.
+
+    Tries multiple filename formats and directory locations.
+
+    Parameters
+    ----------
+    date : datetime
+        Target date
+    base_url : str
+        Base URL for CDDIS archive
+    datapath : Path
+        Output directory
+
+    Returns
+    -------
+    Path
+        Path to downloaded DCB file
+
+    Raises
+    ------
+    Exception
+        If all download attempts fail
+    """
+    filenames = _build_dcb_filenames(date)
+    directory_paths = _build_dcb_directory_paths(date, base_url)
+
+    errors = []
+
+    # Try each directory and filename combination
+    for directory in directory_paths:
+        for filename in filenames:
+            url = directory + filename
+            try:
+                print(
+                    f"  Trying: {filename[:30]}... from {directory.split('/')[-3:-1]}"
+                )
+                file = await download_or_copy_url(url, datapath)
+                print(f"    ✓ Downloaded: {filename}")
+                return file
+            except Exception as e:
+                errors.append(f"{url}: {e}")
+                continue
+
+    # If we get here, nothing worked
+    raise Exception(
+        f"Failed to download DCB for {date.date()} after trying "
+        f"{len(directory_paths) * len(filenames)} combinations.\n"
+        f"Tried directories: {[p.split('/')[-3:-1] for p in directory_paths]}\n"
+        f"Tried filenames: {[f[:40] for f in filenames[:2]]}..."
+    )
+
+
+async def _download_dcb_file_coro(
+    date: datetime,
+    base_url: str = "https://cddis.nasa.gov/archive/",
+    datapath: Path = Path("../../GPS/data/"),
+) -> Path:
+    """
+    Download DCB files for the target date.
+
+    Parameters
+    ----------
+    date : datetime
+        Target date
+    base_url : str
+        Base URL for CDDIS archive
+    datapath : Path
+        Output directory
+
+    Returns
+    -------
+    list[Path]
+        Paths to downloaded DCB files (typically 1 file)
+
+    Notes
+    -----
+    DCB files are daily products, so only one file is needed per date.
+    However, for processing spanning midnight, you might want both days.
+    """
+    print(f"\nDownloading DCB file for {date.date()}...")
+
+    try:
+        file = await _download_dcb_file_with_fallback(date, base_url, datapath)
+        return file
+    except Exception as e:
+        print(f"  ✗ Failed: {e}")
+        raise
+
+
 # Create sync wrappers
 _download_satpos_files = sync_wrapper(_download_satpos_files_coro)
 _download_rinex = sync_wrapper(download_rinex_coro)
+_download_dcb_file = sync_wrapper(_download_dcb_file_coro)
+
+
+def download_dcb_file(
+    date: datetime,
+    base_url: str = "https://cddis.nasa.gov/archive/",
+    datapath: Path = Path("../../GPS/data/"),
+) -> Path:
+    """
+    Download DCB files for a given date (sync wrapper).
+
+    Automatically handles multiple DCB file formats and sources.
+    Matches the signature of download_satpos_files for consistency.
+
+    Parameters
+    ----------
+    date : datetime or astropy.time.Time
+        Target date. If astropy.time.Time, will be converted to datetime.
+    base_url : str, optional
+        Base URL for CDDIS archive, by default "https://cddis.nasa.gov/archive/"
+    datapath : Path, optional
+        Output directory, by default Path("../../GPS/data/")
+
+    Returns
+    -------
+    list[Path]
+        Paths to downloaded DCB files (typically 1 file per day)
+
+    Examples
+    --------
+    >>> from datetime import datetime
+    >>> from astropy.time import Time
+    >>>
+    >>> # With datetime
+    >>> date = datetime(2025, 6, 26)  # Day 177
+    >>> dcb_files = download_dcb_files(date)
+    >>> # Downloads: CAS0MGXRAP_20251770000_01D_01D_DCB.BSX.gz
+    >>> print(dcb_files[0].name)
+    CAS0MGXRAP_20251770000_01D_01D_DCB.BSX.gz
+    >>>
+    >>> # With astropy.time.Time (like SP3/IONEX workflow)
+    >>> time = Time('2025-06-26T00:00:00')
+    >>> dcb_files = download_dcb_files(time.to_datetime())
+
+    Notes
+    -----
+    DCB files are daily products from:
+    - CAS (Chinese Academy of Sciences) - preferred
+    - DLR (German Aerospace Center) - fallback
+
+    Both RAPID and FINAL solutions are tried automatically.
+    """
+    # Convert astropy.time.Time to datetime if needed
+    if hasattr(date, "to_datetime"):
+        date = date.to_datetime()
+
+    return _download_dcb_file(date, base_url, datapath)

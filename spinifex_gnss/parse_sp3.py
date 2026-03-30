@@ -53,6 +53,42 @@ class SP3Data(NamedTuple):
     clock_stds: dict[str, np.ndarray] | None
 
 
+def _normalize_sat_id(sat_id: str) -> str:
+    """Normalize a satellite ID to the standard 3-character zero-padded format.
+    Handles 'G01', 'G1', 'G 1', ' G1' -> all become 'G01'.
+    Returns empty string if not a valid satellite ID."""
+    s = sat_id.strip()
+    if not s or not s[0].isalpha():
+        return ""
+    constellation = s[0].upper()
+    number_part = s[1:].strip()
+    if not number_part.isdigit():
+        return ""
+    try:
+        return f"{constellation}{int(number_part):02d}"
+    except ValueError:
+        return ""
+
+
+def _extract_sat_ids_from_plus_line(line: str) -> list[str]:
+    """Extract satellite IDs from a SP3 header '+' line robustly.
+    Scans past the count field (digits + spaces) instead of hardcoding offset 9,
+    so it works even when the count field has non-standard width."""
+    rest = line[1:]  # skip leading '+'
+    i = 0
+    while i < len(rest) and (rest[i].isdigit() or rest[i] == " "):
+        i += 1
+    sat_portion = rest[i:]
+    ids = []
+    j = 0
+    while j + 3 <= len(sat_portion):
+        sat_id = _normalize_sat_id(sat_portion[j : j + 3])
+        if sat_id:
+            ids.append(sat_id)
+        j += 3
+    return ids
+
+
 def _parse_sp3_header_flexible(lines: list[str]) -> tuple[SP3Header, int]:
     """
     Parse SP3 file header with flexible spacing for legacy formats.
@@ -169,23 +205,16 @@ def _parse_sp3_header_flexible(lines: list[str]) -> tuple[SP3Header, int]:
         fractional_day = float(second_line[45:60].strip())
 
     # Satellite IDs: lines starting with '+'
+    # Satellite IDs: lines starting with '+' (but not '++')
     satellite_ids = []
     data_start_line = None
 
     for i, line in enumerate(lines[2:], start=2):
-        if line.startswith("+"):
-            # Extract satellite IDs
-            # Format: "+   78   C01C03C04..." or "+        E14E18E19..."
-            # Satellites are 3 characters each, can start at various positions
-            sat_line = line[9:].strip()  # Skip "+ nnn" part
-
-            # Split into 3-character chunks
-            j = 0
-            while j < len(sat_line):
-                sat_id = sat_line[j : j + 3].strip()
-                if sat_id and sat_id != "00":  # Skip padding
+        if line.startswith("+") and not line.startswith("++"):
+            # Use robust extraction that handles varying count-field widths
+            for sat_id in _extract_sat_ids_from_plus_line(line):
+                if sat_id not in satellite_ids:  # avoid duplicates
                     satellite_ids.append(sat_id)
-                j += 3
 
         elif line.startswith("++"):
             # Accuracy exponents - skip
@@ -276,7 +305,7 @@ def _parse_sp3_position_line(line: str) -> tuple[str, np.ndarray, float]:
 
     Works for both old and new formats (same structure).
     """
-    sat_id = line[1:4].strip()
+    sat_id = _normalize_sat_id(line[1:4])
 
     try:
         x = float(line[4:18].strip())
@@ -342,17 +371,17 @@ def parse_sp3(filepath: Path, include_stds: bool = False) -> SP3Data:
         try:
             import unlzw3
         except ImportError:
-                raise ImportError(
-                    "unlzw3 library required for .Z files. Install with: "
-                    "pip install unlzw3 --break-system-packages"
-                )
-            
+            raise ImportError(
+                "unlzw3 library required for .Z files. Install with: "
+                "pip install unlzw3 --break-system-packages"
+            )
+
         # Read and decompress
-        with open(filepath, 'rb') as f:
+        with open(filepath, "rb") as f:
             compressed_data = f.read()
-        
+
         decompressed_data = unlzw3.unlzw(compressed_data)
-        lines = decompressed_data.decode('utf-8').split('\n') 
+        lines = decompressed_data.decode("utf-8").split("\n")
     else:
         with open(filepath, "r", encoding="utf-8") as f:
             lines = f.readlines()
