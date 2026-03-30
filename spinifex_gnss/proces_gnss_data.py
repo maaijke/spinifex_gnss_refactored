@@ -45,6 +45,8 @@ from spinifex_gnss.config import (
     MAX_WORKERS_DENSITY,
     MIN_OBSERVATIONS_PER_SEGMENT,
     RinexStrategy,
+    DCB_ERROR_FLOOR_TECU,
+    GIM_ERROR_FLOOR_TECU,
 )
 
 # ============================================================================
@@ -108,11 +110,16 @@ def _get_phase_corrected_with_dcb(
     phase_bias = np.zeros_like(phase_tec)
     phase_std = np.zeros_like(phase_tec)
 
-    # Align phase to DCB-corrected pseudorange per segment
     for seg in np.unique(cycle_slips):
         seg_idx = np.nonzero(cycle_slips == seg)[0]
-        bias = np.nanmean(pseudo_tec[seg_idx] - phase_tec[seg_idx])
-        std = np.nanstd(pseudo_tec[seg_idx] - phase_tec[seg_idx])
+        diff = pseudo_tec[seg_idx] - phase_tec[seg_idx]
+        valid = ~np.isnan(diff)
+        n_valid = np.sum(valid)
+        bias = np.nanmean(diff)
+        if n_valid > 1:
+            std = DCB_ERROR_FLOOR_TECU / np.sqrt(n_valid)
+        else:
+            std = np.nan
         phase_bias[seg_idx] = bias
         phase_std[seg_idx] = std
 
@@ -209,11 +216,19 @@ def _get_gim_phase_corrected(
 
             data_count = np.sum(~np.isnan(phase_tec[seg_idx][high_el_mask]))
             if data_count > 1:
-                phase_std[seg_idx] = np.nanstd(
-                    gim_tec[high_el_mask]
-                    * ipp_sat_stat.airmass[:, h_idx][seg_idx][high_el_mask]
-                    - phase_tec[seg_idx][high_el_mask]
-                ) / np.sqrt(data_count)
+                # std/sqrt(N) is the statistical uncertainty on the bias estimate.
+                # Add GIM_ERROR_FLOOR to represent the systematic GIM error that
+                # does not average down with more observations, and ensures
+                # GIM-corrected data is always weighted lower than DCB-corrected data.
+                phase_std[seg_idx] = (
+                    np.nanstd(
+                        gim_tec[high_el_mask]
+                        * ipp_sat_stat.airmass[:, h_idx][seg_idx][high_el_mask]
+                        - phase_tec[seg_idx][high_el_mask]
+                    )
+                    / np.sqrt(data_count)
+                    + GIM_ERROR_FLOOR_TECU
+                )
             else:
                 phase_std[seg_idx] = np.nan
 

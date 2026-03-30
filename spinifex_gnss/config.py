@@ -8,6 +8,7 @@ used throughout the package.
 import astropy.units as u
 from enum import Enum
 
+
 class RinexStrategy(Enum):
     """
     Strategy for removing the carrier-phase integer ambiguity bias.
@@ -28,10 +29,12 @@ class RinexStrategy(Enum):
         DCB values. Requires both DCB and IONEX downloads. This is the
         previous default behaviour.
     """
-    DCB_ONLY             = "dcb_only"
-    GIM_ONLY             = "gim_only"
+
+    DCB_ONLY = "dcb_only"
+    GIM_ONLY = "gim_only"
     DCB_WITH_GIM_FALLBACK = "dcb_with_gim_fallback"
-    
+
+
 # ============================================================================
 # GNSS Observation Code Priorities
 # ============================================================================
@@ -52,10 +55,10 @@ GNSS_OBS_PRIORITY = {
         "L2": ["L5Q", "L5X", "L7Q", "L7X"],
     },
     "R": {  # GLONASS         #quick fix, remove glonass because of different frequencies
-       "C1": ["C1P", "C1C"],
-       "C2": ["C2P", "C2C"],   
-       "L1": ["L1P", "L1C"],
-       "L2": ["L2P", "L2C"],
+        "C1": ["C1P", "C1C"],
+        "C2": ["C2P", "C2C"],
+        "L1": ["L1P", "L1C"],
+        "L2": ["L2P", "L2C"],
     },
     "C": {  # BeiDou
         "C1": ["C2I", "C2Q", "C2X"],
@@ -81,12 +84,12 @@ GNSS_OBS_PRIORITY_RINEX2 = {
         "L1": ["L1"],  # L1 carrier phase
         "L2": ["L2"],  # L2 carrier phase
     },
-    #"R": {  # GLONASS   # Ignore Glonass RX2 for now untill we understand the stucture 
+    # "R": {  # GLONASS   # Ignore Glonass RX2 for now untill we understand the stucture
     #    "C1": ["P1", "C1"],  # Same structure as GPS
     #    "C2": ["P2"],
     #    "L1": ["L1"],
     #    "L2": ["L2"],
-    #},
+    # },
     "E": {  # Galileo (limited support in RINEX2)
         "C1": ["C1"],  # E1 pseudorange
         "C2": ["C5", "C7"],  # E5a or E5b
@@ -113,6 +116,14 @@ GNSS_OBS_PRIORITY_RINEX2 = {
 # ============================================================================
 # GNSS Processing Constants
 # ============================================================================
+# Minimum error floor added to DCB-corrected STEC (TECU).
+# Represents the accuracy limit of the DCB file itself (~0.1-0.5 ns).
+DCB_ERROR_FLOOR_TECU = 0.5
+
+# Minimum error floor added to GIM-corrected STEC (TECU).
+# Represents the systematic GIM uncertainty that does not average down with N.
+# Ensures GIM measurements are always downweighted relative to DCB.
+GIM_ERROR_FLOOR_TECU = 2.0
 
 # Distance threshold for selecting GNSS stations (in km)
 DISTANCE_KM_CUT = 200
@@ -137,7 +148,7 @@ MIN_DISTANCE_SELECT = 1500 * u.km
 # ============================================================================
 
 # GPS time to TAI correction in seconds
-# needed because astropy.time does not have a gps scale 
+# needed because astropy.time does not have a gps scale
 GPS_TO_TAI_SECONDS = 19
 
 # ============================================================================
@@ -150,8 +161,8 @@ FREQ = {
         "f2": 1227.60e6,  # L2 frequency
     },
     "R": {  # GLONASS (nominal frequencies; actual frequencies vary by slot)
-        "f1": 1602.00e6, #+ 9 * 0.5625e6, 
-        "f2": 1246.00e6, #+ 9 * 0.4375e6,
+        "f1": 1602.00e6,  # + 9 * 0.5625e6,
+        "f2": 1246.00e6,  # + 9 * 0.4375e6,
     },
     "E": {  # Galileo
         "f1": 1575.42e6,  # E1 frequency
@@ -178,7 +189,7 @@ GNSS_SERVERS = {
     "rinex": [
         "https://cddis.nasa.gov/archive/gnss/data/daily/",
         "https://www.epncb.oma.be/pub/obs/",
-        #"https://webring.gm.ingv.it:44324/rinex/RING/",
+        # "https://webring.gm.ingv.it:44324/rinex/RING/",
         "https://ga-gnss-data-rinex-v1.s3.amazonaws.com/public/daily/",
     ],
 }
