@@ -6,7 +6,32 @@ used throughout the package.
 """
 
 import astropy.units as u
+from enum import Enum
 
+class RinexStrategy(Enum):
+    """
+    Strategy for removing the carrier-phase integer ambiguity bias.
+
+    DCB_ONLY
+        Use DCB file corrections exclusively. Satellites without both a
+        satellite and receiver DCB entry are dropped. No IONEX download
+        needed — fastest option and gives the most accurate absolute TEC
+        when DCB values exist.
+
+    GIM_ONLY
+        Align every arc to the GIM (IONEX) map. Works for any satellite
+        but is slower (IONEX download + per-arc interpolation) and limited
+        by GIM accuracy (~2-5 TECU RMS).
+
+    DCB_WITH_GIM_FALLBACK
+        Use DCB where available; fall back to GIM for satellites that lack
+        DCB values. Requires both DCB and IONEX downloads. This is the
+        previous default behaviour.
+    """
+    DCB_ONLY             = "dcb_only"
+    GIM_ONLY             = "gim_only"
+    DCB_WITH_GIM_FALLBACK = "dcb_with_gim_fallback"
+    
 # ============================================================================
 # GNSS Observation Code Priorities
 # ============================================================================

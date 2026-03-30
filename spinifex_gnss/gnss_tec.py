@@ -32,7 +32,7 @@ from spinifex_gnss.parse_dcb import parse_dcb_file, DCBData
 from spinifex_gnss.proces_gnss_data import get_ipp_density
 from spinifex_gnss.gnss_stations import gnss_pos_dict
 from spinifex_gnss.gnss_geometry import get_sp3_data, _convert_ipp_lonlatr_to_xyz
-from spinifex_gnss.config import MIN_DISTANCE_SELECT, DEFAULT_IONO_HEIGHT
+from spinifex_gnss.config import MIN_DISTANCE_SELECT, DEFAULT_IONO_HEIGHT, RinexStrategy
 
 
 def get_min_distance(ipp: IPP, gnss_pos: EarthLocation) -> u.Quantity:
@@ -176,6 +176,7 @@ def get_electron_density_gnss(
     n_time_slots: int = 5,
     max_time_diff_min: float = 2.5,
     use_time_weighting: bool = True,
+    strategy: RinexStrategy = RinexStrategy.DCB_WITH_GIM_FALLBACK,
 ) -> ElectronDensity:
     """
     Calculate electron density from GNSS observations.
@@ -246,6 +247,12 @@ def get_electron_density_gnss(
 
         # Select IPPs for this day
         selected_ipp = _select_times_from_ipp(ipp, indices)
+        if strategy in (RinexStrategy.DCB_ONLY, RinexStrategy.DCB_WITH_GIM_FALLBACK):
+            # Download DCB files for bias correction
+            print(f"  Downloading DCB files...")
+            dcb_file = download_dcb_file(date=day.to_datetime(), datapath=data_directory)
+            # parse DCB files
+            dcb_data = parse_dcb_file(dcb_file)
 
         # Find nearby GNSS stations
         gnss_list = select_gnss_stations(selected_ipp)
@@ -314,35 +321,30 @@ def get_electron_density_gnss(
         print(f"  Parsing SP3 files...")
         sp3_data = get_sp3_data(sp3_files[:3])  # Use 3 days for interpolation
 
-        # Download IONEX data for GIM correction
-        print(f"  Downloading IONEX files...")
-        default_options = IonexOptions(remove_midnight_jumps=True)
-        sorted_ionex_paths = _download_ionex(
-            times=selected_ipp.times, options=default_options
-        )
-
-        sorted_next_day_paths = (
-            _download_ionex(
-                times=selected_ipp.times + 1 * u.day, options=default_options
+        # Download IONEX only when GIM alignment is needed
+        ionex = None
+        if strategy in (RinexStrategy.GIM_ONLY, RinexStrategy.DCB_WITH_GIM_FALLBACK):
+            print(f"  Downloading IONEX files...")
+            default_options = IonexOptions(remove_midnight_jumps=True)
+            sorted_ionex_paths = _download_ionex(
+                times=selected_ipp.times, options=default_options
             )
-            if default_options.remove_midnight_jumps
-            else [None] * len(sorted_ionex_paths)
-        )
+            sorted_next_day_paths = (
+                _download_ionex(
+                    times=selected_ipp.times + 1 * u.day, options=default_options
+                )
+                if default_options.remove_midnight_jumps
+                else [None] * len(sorted_ionex_paths)
+            )
+            print(f"  Reading IONEX files...")
+            ionex = read_ionex(
+                sorted_ionex_paths[0],
+                sorted_next_day_paths[0],
+                options=default_options,
+                concatenate=True,
+            )
 
-        # Read IONEX data
-        print(f"  Reading IONEX files...")
-        ionex = read_ionex(
-            sorted_ionex_paths[0],
-            sorted_next_day_paths[0],
-            options=default_options,
-            concatenate=True,
-        )
 
-        # Download DCB files for bias correction
-        print(f"  Downloading DCB files...")
-        dcb_file = download_dcb_file(date=day.to_datetime(), datapath=data_directory)
-        # parse DCB files
-        dcb_data = parse_dcb_file(dcb_file)
         # Calculate electron density for this day
         print(f"  Calculating electron density...")
         day_density = get_ipp_density(
@@ -355,12 +357,13 @@ def get_electron_density_gnss(
             max_time_diff_min=max_time_diff_min,
             use_time_weighting=use_time_weighting,
             max_workers=max_workers,
+            strategy=strategy,
         )
 
         all_data.append(day_density)
         print(f"  ✓ Day complete\n")
 
-        del gnss_data_list, sp3_data, ionex
+        del gnss_data_list, sp3_data
         gc.collect()  # Force garbage collection
     # Combine results from all days
     print(f"Combining results from {len(all_data)} days...")

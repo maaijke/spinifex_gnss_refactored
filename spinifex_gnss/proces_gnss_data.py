@@ -44,6 +44,7 @@ from spinifex_gnss.config import (
     INTERPOLATION_ORDER,
     MAX_WORKERS_DENSITY,
     MIN_OBSERVATIONS_PER_SEGMENT,
+    RinexStrategy,
 )
 
 # ============================================================================
@@ -675,6 +676,7 @@ def get_gnss_station_density(
     n_time_slots: int = 1,
     max_time_diff_min: float = 2.5,
     use_time_weighting: bool = False,
+    strategy: RinexStrategy = RinexStrategy.DCB_WITH_GIM_FALLBACK,
 ) -> list[list[np.ndarray]]:
     """
     Process one GNSS station with optional time averaging.
@@ -741,27 +743,30 @@ def get_gnss_station_density(
             obs1 = gnss_data.c1_str  # e.g., 'C1W', 'C1P', 'C1C'
             obs2 = gnss_data.c2_str  # e.g., 'C2W', 'C2P', 'C2C'
 
-            # Try to get DCB corrections
-            satellite_dcb_ns = (
-                get_satellite_dcb(dcb_data.satellite_dcb, prn, obs1, obs2)
-                if dcb_data is not None
-                else None
-            )
-            receiver_dcb_ns = (
-                get_receiver_dcb_c1c2(
+            # Choose correction method based on strategy
+            satellite_dcb_ns = None
+            receiver_dcb_ns = None
+            if dcb_data is not None and strategy in (
+                RinexStrategy.DCB_ONLY,
+                RinexStrategy.DCB_WITH_GIM_FALLBACK,
+            ):
+                satellite_dcb_ns = get_satellite_dcb(
+                    dcb_data.satellite_dcb, prn, obs1, obs2
+                )
+                receiver_dcb_ns = get_receiver_dcb_c1c2(
                     dcb_data.receiver_dcb,
                     gnss_data.station,
                     obs1,
                     obs2,
                     constellation=gnss_data.constellation,
                 )
-                if dcb_data is not None
-                else None
-            )
 
-            # Check if we have DCB corrections
-            if satellite_dcb_ns is not None and receiver_dcb_ns is not None:
-                # Use DCB-based correction
+            have_dcb = satellite_dcb_ns is not None and receiver_dcb_ns is not None
+
+            if strategy == RinexStrategy.DCB_ONLY:
+                if not have_dcb:
+                    # No DCB available and no GIM fallback — skip satellite
+                    continue
                 stec_value, stec_error = _get_phase_corrected_with_dcb(
                     phase_tec=phase_stec,
                     c1=sat_data[:, 0],
@@ -771,9 +776,8 @@ def get_gnss_station_density(
                     satellite_dcb_ns=satellite_dcb_ns,
                     receiver_dcb_ns=receiver_dcb_ns,
                 )
-            else:
-                # Fall back to GIM-only correction
 
+            elif strategy == RinexStrategy.GIM_ONLY:
                 stec_value, stec_error = _get_gim_phase_corrected(
                     phase_stec,
                     ipp_sat_stat[-1],
@@ -781,6 +785,26 @@ def get_gnss_station_density(
                     ionex,
                     max_time_diff_min=max_time_diff_min,
                 )
+
+            else:  # DCB_WITH_GIM_FALLBACK
+                if have_dcb:
+                    stec_value, stec_error = _get_phase_corrected_with_dcb(
+                        phase_tec=phase_stec,
+                        c1=sat_data[:, 0],
+                        c2=sat_data[:, 1],
+                        constellation=gnss_data.constellation,
+                        tec_coefficient=tec_coeff,
+                        satellite_dcb_ns=satellite_dcb_ns,
+                        receiver_dcb_ns=receiver_dcb_ns,
+                    )
+                else:
+                    stec_value, stec_error = _get_gim_phase_corrected(
+                        phase_stec,
+                        ipp_sat_stat[-1],
+                        all_time_indices,
+                        ionex,
+                        max_time_diff_min=max_time_diff_min,
+                    )
             stec_values.append(stec_value)
             stec_errors.append(stec_error)
         except Exception as e:
@@ -844,6 +868,7 @@ def get_ipp_density(
     max_time_diff_min: float = 2.5,
     use_time_weighting: bool = False,
     max_workers: int = MAX_WORKERS_DENSITY,
+    strategy: RinexStrategy = RinexStrategy.DCB_WITH_GIM_FALLBACK,
 ) -> tec_data.ElectronDensity:
     """
     Calculate electron density with optional time averaging.
@@ -913,6 +938,7 @@ def get_ipp_density(
                 n_time_slots,
                 max_time_diff_min,
                 use_time_weighting,
+                strategy,
             ): gnss_data.station
             + gnss_data.constellation
             for gnss_data in gnss_data_list
