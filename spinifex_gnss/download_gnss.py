@@ -893,7 +893,7 @@ async def _download_dcb_file_with_fallback(
             url = directory + filename
             try:
                 print(
-                    f"  Trying: {filename[:30]}... from {directory.split('/')[-3:-1]}"
+                    f"  Trying: {filename}... from {directory.split('/')[-3:-1]}"
                 )
                 file = await download_or_copy_url(url, datapath)
                 print(f"    ✓ Downloaded: {filename}")
@@ -907,7 +907,7 @@ async def _download_dcb_file_with_fallback(
         f"Failed to download DCB for {date.date()} after trying "
         f"{len(directory_paths) * len(filenames)} combinations.\n"
         f"Tried directories: {[p.split('/')[-3:-1] for p in directory_paths]}\n"
-        f"Tried filenames: {[f[:40] for f in filenames[:2]]}..."
+        f"Tried filenames: {filenames[:2]}..."
     )
 
 
