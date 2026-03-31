@@ -130,7 +130,7 @@ GIM_ERROR_FLOOR_TECU = 2.0
 # rejects arcs with severe multipath while keeping slightly noisy data.
 MAX_PSEUDO_PHASE_STD_TECU = 6.0
 # Distance threshold for selecting GNSS stations (in km)
-DISTANCE_KM_CUT = 200
+DISTANCE_KM_CUT = 500
 
 # Number of distance points for interpolation
 NDIST_POINTS = 300
@@ -146,7 +146,7 @@ ELEVATION_CUT = 20.0
 
 
 # Interpolation order for spatial interpolation
-INTERPOLATION_ORDER = 3
+INTERPOLATION_ORDER = 2
 
 # Default ionospheric pierce point height (in km)
 DEFAULT_IONO_HEIGHT = 450 * u.km
@@ -154,13 +154,6 @@ DEFAULT_IONO_HEIGHT = 450 * u.km
 # Minimum distance for GNSS station selection (in km)
 MIN_DISTANCE_SELECT = 1500 * u.km
 
-# ============================================================================
-# Time Constants
-# ============================================================================
-
-# GPS time to TAI correction in seconds
-# needed because astropy.time does not have a gps scale
-GPS_TO_TAI_SECONDS = 19
 
 # ============================================================================
 # GNSS Frequency Definitions (in Hz)
@@ -234,7 +227,7 @@ MAX_WORKERS_DENSITY = 30
 # ============================================================================
 
 # Minimum number of observations required per cycle slip segment
-MIN_OBSERVATIONS_PER_SEGMENT = 10
+MIN_OBSERVATIONS_PER_SEGMENT = 50
 
 # ============================================================================
 # File Naming Conventions
