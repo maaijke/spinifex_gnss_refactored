@@ -154,6 +154,13 @@ DEFAULT_IONO_HEIGHT = 450 * u.km
 # Minimum distance for GNSS station selection (in km)
 MIN_DISTANCE_SELECT = 1500 * u.km
 
+# ============================================================================
+# Time Constants
+# ============================================================================
+
+# GPS time to TAI correction in seconds
+# needed because astropy.time does not have a gps scale
+GPS_TO_TAI_SECONDS = 19
 
 # ============================================================================
 # GNSS Frequency Definitions (in Hz)
