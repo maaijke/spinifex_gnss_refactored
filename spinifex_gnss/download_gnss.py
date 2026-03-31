@@ -781,77 +781,58 @@ def download_rinex(
 
 def _build_dcb_filenames(date: datetime) -> list[str]:
     """
-    Build list of possible DCB filenames for a given date.
+    Build list of possible DCB/BIA filenames for a given date.
 
-    DCB filename format (CAS MGEX):
-    CAS0MGXRAP_YYYYDDD0000_01D_01D_DCB.BSX.gz
+    The IGS transitioned from MGEX to OPS products around November 2022:
 
-    Where:
-    - CAS0 = Chinese Academy of Sciences, version 0
-    - MGXRAP = MGEX Rapid solution
-    - YYYYDDD = year and day-of-year
-    - 0000 = hour and minute (always 0000 for daily)
-    - 01D = 1-day product period
-    - 01D = 1-day sampling interval
-    - DCB = content type (Differential Code Bias)
-    - BSX = BIAS-SINEX format
-    - gz = gzip compression
+    Old format (pre-2023, MGEX):
+        CAS0MGXRAP_YYYYDDD0000_01D_01D_DCB.BSX.gz
+        CAS0MGXFIN_YYYYDDD0000_01D_01D_DCB.BSX.gz
 
-    Parameters
-    ----------
-    date : datetime
-        Target date
+    New format (2023+, IGS OPS):
+        CAS1OPSRAP_YYYYDDD0000_01D_01D_DCB.BIA.gz
+        GFZ0OPSRAP_YYYYDDD0000_01D_01D_DCB.BIA.gz
 
-    Returns
-    -------
-    list[str]
-        List of possible DCB filenames to try
+    Both formats use the same internal BIAS-SINEX structure.
+    New files are tried first since they are the current standard.
     """
     year = date.year
     doy = date.timetuple().tm_yday
+    stamp = f"{year}{doy:03d}0000_01D_01D_DCB"
 
-    # Primary: CAS rapid solution (most recent, best quality for near-real-time)
-    cas_rapid = f"CAS0MGXRAP_{year}{doy:03d}0000_01D_01D_DCB.BSX.gz"
-
-    # Fallback: CAS final solution
-    cas_final = f"CAS0MGXFIN_{year}{doy:03d}0000_01D_01D_DCB.BSX.gz"
-
-    # DLR alternatives (German Aerospace Center)
-    dlr_rapid = f"DLR0MGXRAP_{year}{doy:03d}0000_01D_01D_DCB.BSX.gz"
-    dlr_final = f"DLR0MGXFIN_{year}{doy:03d}0000_01D_01D_DCB.BSX.gz"
-
-    return [cas_rapid, cas_final, dlr_rapid, dlr_final]
+    return [
+        # New IGS OPS format (.BIA, 2023+) — try first for recent dates
+        f"CAS1OPSRAP_{stamp}.BIA.gz",
+        f"CAS1OPSFIN_{stamp}.BIA.gz",
+        f"GFZ0OPSRAP_{stamp}.BIA.gz",
+        f"GFZ0OPSFIN_{stamp}.BIA.gz",
+        # Old MGEX format (.BSX, pre-2023) — fallback for historical data
+        f"CAS0MGXRAP_{stamp}.BSX.gz",
+        f"CAS0MGXFIN_{stamp}.BSX.gz",
+        f"DLR0MGXRAP_{stamp}.BSX.gz",
+        f"DLR0MGXFIN_{stamp}.BSX.gz",
+    ]
 
 
 def _build_dcb_directory_paths(date: datetime, base_url: str) -> list[str]:
     """
     Build list of possible DCB directory paths.
 
-    CDDIS directory structure:
-    - /gnss/products/mgex/dcb/YYYY/
-    - /pub/gps/products/mgex/dcb/YYYY/ (alternative)
+    New IGS OPS directory (2023+):
+        /gnss/products/bias/YYYY/
 
-    Parameters
-    ----------
-    date : datetime
-        Target date
-    base_url : str
-        Base URL for CDDIS
-
-    Returns
-    -------
-    list[str]
-        List of directory URLs to try
+    Old MGEX directory (pre-2023):
+        /gnss/products/mgex/dcb/YYYY/
     """
     year = date.year
 
-    paths = [
+    return [
+        # New IGS OPS path — try first
+        f"{base_url}gnss/products/bias/{year}/",
+        # Old MGEX path — fallback for historical data
         f"{base_url}gnss/products/mgex/dcb/{year}/",
         f"{base_url}pub/gps/products/mgex/dcb/{year}/",
     ]
-
-    return paths
-
 
 async def _download_dcb_file_with_fallback(
     date: datetime,
