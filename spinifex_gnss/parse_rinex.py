@@ -134,7 +134,7 @@ def get_rinex_data(fname: Path) -> RinexData:
             continue
         n_types = len(header.datatypes[sat_id[:1]])
         obs_vals = [
-            float(i.split()[0]) if (i.split() and abs(float(i.split()[0])>1e-8)) else np.nan
+            float(i.split()[0]) if (i.split() and abs(float(i.split()[0]))>1e-8) else np.nan
             for i in [
                 line[i : i + width].strip()
                 for i in range(3, 3 + n_types * width, width)

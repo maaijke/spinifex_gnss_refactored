@@ -219,9 +219,42 @@ def get_satellite_dcb(
         return None
 
     obs_pair = f"{obs1}-{obs2}"
+    if obs_pair in satellite_dcb[prn]:
+        return satellite_dcb[prn][obs_pair]
 
-    # Return exact match only - no fallback
-    return satellite_dcb[prn].get(obs_pair, None)
+    # Reverse pair (file may store obs2-obs1)
+    rev_pair = f"{obs2}-{obs1}"
+    if rev_pair in satellite_dcb[prn]:
+        return -satellite_dcb[prn][rev_pair]
+
+    # Chain derivation: find a pivot X such that DSB(obs1,X) and DSB(X,obs2) exist
+    # DSB(obs1, obs2) = DSB(obs1, X) + DSB(X, obs2)
+    #                 = DSB(obs1, X) - DSB(obs2, X)
+    for pair, val in satellite_dcb[prn].items():
+        pivot1, pivot2 = pair.split('-')
+        # Case: DSB(obs1, pivot1) exists and DSB(obs2, pivot1) exists
+        # -> DSB(obs1,obs2) = DSB(obs1,pivot1) - DSB(obs2,pivot1)
+        if pivot1 == obs1:   # stored as obs1-X: we have DSB(obs1, X)
+            dsb_obs2_x = satellite_dcb[prn].get(f"{obs2}-{pivot2}")
+            if dsb_obs2_x is not None:
+                return val - dsb_obs2_x
+        if pivot2 == obs1:   # stored as X-obs1: we have -DSB(obs1, X)
+            dsb_obs2_x = satellite_dcb[prn].get(f"{obs2}-{pivot1}")
+            if dsb_obs2_x is not None:
+                return -val - dsb_obs2_x   # -DSB(obs1,X) - DSB(obs2,X) ... wrong
+    # Simpler explicit chain: DSB(A,C) = DSB(A,B) - DSB(C,B)
+    # Try all stored pairs as pivot
+    stored = satellite_dcb[prn]
+    for pivot in set(o for p in stored for o in p.split('-')):
+        dsb_obs1_pivot = stored.get(f"{obs1}-{pivot}") or (
+            -stored[f"{pivot}-{obs1}"] if f"{pivot}-{obs1}" in stored else None
+        )
+        dsb_obs2_pivot = stored.get(f"{obs2}-{pivot}") or (
+            -stored[f"{pivot}-{obs2}"] if f"{pivot}-{obs2}" in stored else None
+        )
+        if dsb_obs1_pivot is not None and dsb_obs2_pivot is not None:
+            return dsb_obs1_pivot - dsb_obs2_pivot
+    return None
 
 
 def get_receiver_dcb_c1c2(
@@ -280,6 +313,24 @@ def get_receiver_dcb_c1c2(
         osb2 = receiver_dcb.get(f"{constellation}_{sta}_{obs2}")
         if osb1 is not None and osb2 is not None:
             return osb1 - osb2
+
+    prefix = f"{constellation}_{station[:4] if len(station) > 4 else station}_"
+    stored = {
+        k[len(prefix):]: v
+        for k, v in receiver_dcb.items()
+        if k.startswith(prefix) and '_' in k[len(prefix):]
+    }
+    # stored keys are now like 'C1C_C2C', 'C1C_C1P'
+    pivots = set(o for pair in stored for o in pair.split('_'))
+    for pivot in pivots:
+        dsb_obs1_pivot = stored.get(f"{obs1}_{pivot}") or (
+            -stored[f"{pivot}_{obs1}"] if f"{pivot}_{obs1}" in stored else None
+        )
+        dsb_obs2_pivot = stored.get(f"{obs2}_{pivot}") or (
+            -stored[f"{pivot}_{obs2}"] if f"{pivot}_{obs2}" in stored else None
+        )
+        if dsb_obs1_pivot is not None and dsb_obs2_pivot is not None:
+            return dsb_obs1_pivot - dsb_obs2_pivot
 
     return None
 

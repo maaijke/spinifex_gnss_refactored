@@ -124,15 +124,26 @@ DCB_ERROR_FLOOR_TECU = 0.5
 # Represents the systematic GIM uncertainty that does not average down with N.
 # Ensures GIM measurements are always downweighted relative to DCB.
 GIM_ERROR_FLOOR_TECU = 2.0
-
+# Maximum allowed std of (pseudo_tec - phase_tec) for a segment to be used.
+# Above this threshold, pseudorange multipath is too severe for reliable
+# bias estimation. Typical clean pseudorange: 3-5 TECU. Threshold at 6 TECU
+# rejects arcs with severe multipath while keeping slightly noisy data.
+MAX_PSEUDO_PHASE_STD_TECU = 6.0
 # Distance threshold for selecting GNSS stations (in km)
 DISTANCE_KM_CUT = 200
 
 # Number of distance points for interpolation
 NDIST_POINTS = 300
 
-# Minimum elevation angle for satellite observations (in degrees)
-ELEVATION_CUT = 25
+# # Elevation cut used when ESTIMATING the phase bias (DCB or GIM alignment).
+# Higher cut reduces pseudorange multipath and GIM mapping errors.
+# Pseudorange noise roughly doubles below 30 deg vs above 40 deg.
+ELEVATION_CUT_BIAS = 35.0
+
+# Elevation cut applied when SELECTING phase stec data for the final fit.
+# Can be lower because the phase observable itself is clean at any elevation.
+ELEVATION_CUT = 20.0
+
 
 # Interpolation order for spatial interpolation
 INTERPOLATION_ORDER = 3

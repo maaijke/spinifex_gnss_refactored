@@ -41,12 +41,14 @@ from spinifex_gnss.config import (
     DISTANCE_KM_CUT,
     NDIST_POINTS,
     ELEVATION_CUT,
+    ELEVATION_CUT_BIAS,
     INTERPOLATION_ORDER,
     MAX_WORKERS_DENSITY,
     MIN_OBSERVATIONS_PER_SEGMENT,
     RinexStrategy,
     DCB_ERROR_FLOOR_TECU,
     GIM_ERROR_FLOOR_TECU,
+    MAX_PSEUDO_PHASE_STD_TECU,
 )
 
 # ============================================================================
@@ -64,6 +66,7 @@ def _get_phase_corrected_with_dcb(
     phase_tec: np.ndarray,
     c1: np.ndarray,
     c2: np.ndarray,
+    ipp_sat_stat: IPP,
     constellation: str = "G",
     tec_coefficient: tuple = None,
     satellite_dcb_ns: float = None,
@@ -107,19 +110,23 @@ def _get_phase_corrected_with_dcb(
 
     # Detect cycle slips
     cycle_slips = get_cycle_slips(phase_tec)
-    phase_bias = np.zeros_like(phase_tec)
-    phase_std = np.zeros_like(phase_tec)
+    phase_bias = np.full_like(phase_tec, np.nan)
+    phase_std = np.full_like(phase_tec, np.nan)
 
     for seg in np.unique(cycle_slips):
         seg_idx = np.nonzero(cycle_slips == seg)[0]
         diff = pseudo_tec[seg_idx] - phase_tec[seg_idx]
-        valid = ~np.isnan(diff)
+        elevation = ipp_sat_stat.altaz.alt.deg[seg_idx]
+        valid = ~np.isnan(diff) & (elevation >= ELEVATION_CUT_BIAS)
         n_valid = np.sum(valid)
+        if n_valid < MIN_OBSERVATIONS_PER_SEGMENT:
+            # Too few pseudorange points — noise dominates, bias unreliable.
+            # Leave as NaN so this arc is excluded from the fit.
+            continue
+        if np.nanstd(diff) > MAX_PSEUDO_PHASE_STD_TECU:
+            continue
         bias = np.nanmean(diff)
-        if n_valid > 1:
-            std = DCB_ERROR_FLOOR_TECU / np.sqrt(n_valid)
-        else:
-            std = np.nan
+        std = np.nanstd(diff[valid]) / np.sqrt(n_valid) + DCB_ERROR_FLOOR_TECU
         phase_bias[seg_idx] = bias
         phase_std[seg_idx] = std
 
@@ -156,8 +163,8 @@ def _get_gim_phase_corrected(
     with the extended time window for time averaging.
     """
     cycle_slips = get_cycle_slips(phase_tec=phase_tec)
-    phase_bias = np.zeros_like(phase_tec)
-    phase_std = np.zeros_like(phase_tec)
+    phase_bias = np.full_like(phase_tec, np.nan)
+    phase_std = np.full_like(phase_tec, np.nan)
 
     default_options = tec_data.IonexOptions(remove_midnight_jumps=True)
     h_idx = np.argmin(
@@ -205,7 +212,7 @@ def _get_gim_phase_corrected(
             apply_earth_rotation=default_options.apply_earth_rotation,
         )
 
-        high_el_mask = elevation > ELEVATION_CUT
+        high_el_mask = elevation > ELEVATION_CUT_BIAS
 
         if np.sum(high_el_mask) > 0:
             phase_bias[seg_idx] = np.nanmean(
@@ -786,6 +793,7 @@ def get_gnss_station_density(
                     phase_tec=phase_stec,
                     c1=sat_data[:, 0],
                     c2=sat_data[:, 1],
+                    ipp_sat_stat=ipp_sat_stat,
                     constellation=gnss_data.constellation,
                     tec_coefficient=tec_coeff,
                     satellite_dcb_ns=satellite_dcb_ns,
@@ -807,6 +815,7 @@ def get_gnss_station_density(
                         phase_tec=phase_stec,
                         c1=sat_data[:, 0],
                         c2=sat_data[:, 1],
+                        ipp_sat_stat=ipp_sat_stat,
                         constellation=gnss_data.constellation,
                         tec_coefficient=tec_coeff,
                         satellite_dcb_ns=satellite_dcb_ns,
