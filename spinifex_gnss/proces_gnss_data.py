@@ -761,7 +761,7 @@ def get_gnss_station_density(
             have_dcb = satellite_dcb_ns is not None and receiver_dcb_ns is not None
             #check if we need to process this one
             if not have_dcb and strategy==RinexStrategy.DCB_ONLY:
-                print(f"No dcb for {gnss_data.station} {prn}: {e} and user requested DCB_ONLY")
+                print(f"No dcb for {gnss_data.station} {prn} and user requested DCB_ONLY")
                 continue
             
             tec_coeff = None
