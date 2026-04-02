@@ -736,6 +736,34 @@ def get_gnss_station_density(
 
     for prn in prns:
         try:
+            # Choose correction method based on strategy
+            satellite_dcb_ns = None
+            receiver_dcb_ns = None
+            # Choose correction method based on DCB availability
+            # Try DCB-based correction first
+            obs1 = gnss_data.c1_str  # e.g., 'C1W', 'C1P', 'C1C'
+            obs2 = gnss_data.c2_str  # e.g., 'C2W', 'C2P', 'C2C'
+            if dcb_data is not None and strategy in (
+                RinexStrategy.DCB_ONLY,
+                RinexStrategy.DCB_WITH_GIM_FALLBACK,
+            ):
+                satellite_dcb_ns = get_satellite_dcb(
+                    dcb_data.satellite_dcb, prn, obs1, obs2
+                )
+                receiver_dcb_ns = get_receiver_dcb_c1c2(
+                    dcb_data.receiver_dcb,
+                    gnss_data.station,
+                    obs1,
+                    obs2,
+                    constellation=gnss_data.constellation,
+                )
+
+            have_dcb = satellite_dcb_ns is not None and receiver_dcb_ns is not None
+            #check if we need to process this one
+            if not have_dcb and strategy==RinexStrategy.DCB_ONLY:
+                print(f"No dcb for {gnss_data.station} {prn}: {e} and user requested DCB_ONLY")
+                continue
+            
             tec_coeff = None
             sat_data = gnss_data.gnss[prn]
             if not gnss_data.tec_coefficients is None:
@@ -759,31 +787,6 @@ def get_gnss_station_density(
             )
 
             all_time_indices = np.arange(len(gnss_data.times))
-
-            # Choose correction method based on DCB availability
-            # Try DCB-based correction first
-            obs1 = gnss_data.c1_str  # e.g., 'C1W', 'C1P', 'C1C'
-            obs2 = gnss_data.c2_str  # e.g., 'C2W', 'C2P', 'C2C'
-
-            # Choose correction method based on strategy
-            satellite_dcb_ns = None
-            receiver_dcb_ns = None
-            if dcb_data is not None and strategy in (
-                RinexStrategy.DCB_ONLY,
-                RinexStrategy.DCB_WITH_GIM_FALLBACK,
-            ):
-                satellite_dcb_ns = get_satellite_dcb(
-                    dcb_data.satellite_dcb, prn, obs1, obs2
-                )
-                receiver_dcb_ns = get_receiver_dcb_c1c2(
-                    dcb_data.receiver_dcb,
-                    gnss_data.station,
-                    obs1,
-                    obs2,
-                    constellation=gnss_data.constellation,
-                )
-
-            have_dcb = satellite_dcb_ns is not None and receiver_dcb_ns is not None
 
             if strategy == RinexStrategy.DCB_ONLY:
                 if not have_dcb:
