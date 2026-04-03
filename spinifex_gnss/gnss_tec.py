@@ -247,6 +247,7 @@ def get_electron_density_gnss(
 
         # Select IPPs for this day
         selected_ipp = _select_times_from_ipp(ipp, indices)
+        dcb_data = None    
         if strategy in (RinexStrategy.DCB_ONLY, RinexStrategy.DCB_WITH_GIM_FALLBACK):
             # Download DCB files for bias correction
             print(f"  Downloading DCB files...")

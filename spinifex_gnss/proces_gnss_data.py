@@ -791,12 +791,6 @@ def get_gnss_station_density(
         if calculate_gim_bias and strategy == RinexStrategy.DCB_WITH_GIM_FALLBACK
         else None
     )
-    ipp_gim = get_stat_sat_ipp(
-                satpos=sat_pos,
-                gnsspos=gnss_pos_dict[gnss_data.station],
-                times=transmission_time,
-                height_array=[DEFAULT_IONO_HEIGHT,],
-            )
     for prn in prns:
         try:
             # Choose correction method based on strategy
@@ -842,6 +836,12 @@ def get_gnss_station_density(
                 tec_coefficient=tec_coeff,
             )
             sat_pos = get_sat_pos(sp3_data, transmission_time, prn)
+            ipp_gim = get_stat_sat_ipp(
+                satpos=sat_pos,
+                gnsspos=gnss_pos_dict[gnss_data.station],
+                times=transmission_time,
+                height_array=DEFAULT_IONO_HEIGHT,
+            )
             ipp_sat_stat.append(
                 get_stat_sat_ipp(
                     satpos=sat_pos,
@@ -861,7 +861,7 @@ def get_gnss_station_density(
                     phase_tec=phase_stec,
                     c1=sat_data[:, 0],
                     c2=sat_data[:, 1],
-                    ipp_sat_stat=ipp_sat_stat[-1],
+                    ipp_sat_stat=ipp_gim,
                     constellation=gnss_data.constellation,
                     tec_coefficient=tec_coeff,
                     satellite_dcb_ns=satellite_dcb_ns,
@@ -883,7 +883,7 @@ def get_gnss_station_density(
                         phase_tec=phase_stec,
                         c1=sat_data[:, 0],
                         c2=sat_data[:, 1],
-                        ipp_sat_stat=ipp_sat_stat[-1],
+                        ipp_sat_stat=ipp_gim,
                         constellation=gnss_data.constellation,
                         tec_coefficient=tec_coeff,
                         satellite_dcb_ns=satellite_dcb_ns,
@@ -952,7 +952,7 @@ def get_gnss_station_density(
             ipp_target=ipp_target,
             timeselect=timeselect,
             profiles=profiles,
-            correction_methods=correction_methods,
+            correction_methods=np.array(correction_methods),
         )
     else:
         # Time averaging (better coverage, still fast with vectorization)
@@ -972,7 +972,7 @@ def get_gnss_station_density(
             time_weights=time_weights,
             profiles=profiles,
             use_time_weighting=use_time_weighting,
-            correction_methods=correction_methods,
+            correction_methods=np.array(correction_methods),
         )
 
     del stec_values, stec_errors, ipp_sat_stat
