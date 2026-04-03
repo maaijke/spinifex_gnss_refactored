@@ -65,8 +65,11 @@ class GimBiasStats:
 
     diffs: list = field(default_factory=list)  # individual epoch differences
 
-    def add(self, dcb_stec: np.ndarray, gim_stec: np.ndarray) -> None:
+    def add(self, dcb_stec: np.ndarray, gim_stec: np.ndarray,
+            elevation: np.ndarray = None) -> None:
         valid = ~np.isnan(dcb_stec) & ~np.isnan(gim_stec)
+        if elevation is not None:
+            valid &= elevation >= ELEVATION_CUT_BIAS
         self.diffs.extend((dcb_stec[valid] - gim_stec[valid]).tolist())
 
     @property
@@ -922,8 +925,8 @@ def get_gnss_station_density(
                         gim_vtec,
                         elevation=ipp_gim.altaz.alt.deg,
                     )
-                except Exception:
-                    pass
+                except Exception as e:
+                    print(f"    GIM bias stats exception for {prn}: {e}")
             stec_values.append(stec_value)
             stec_errors.append(stec_error)
         except Exception as e:
