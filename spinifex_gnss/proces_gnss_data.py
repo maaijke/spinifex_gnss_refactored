@@ -50,6 +50,7 @@ from spinifex_gnss.config import (
     GIM_ERROR_FLOOR_TECU,
     MAX_PSEUDO_PHASE_STD_TECU,
     MIN_DCB_ARCS_FOR_GIM_BIAS,
+    DEFAULT_IONO_HEIGHT,
 )
 
 # ============================================================================
@@ -148,9 +149,9 @@ def _get_phase_corrected_with_dcb(
             # Too few pseudorange points — noise dominates, bias unreliable.
             # Leave as NaN so this arc is excluded from the fit.
             continue
-        if np.nanstd(diff) > MAX_PSEUDO_PHASE_STD_TECU:
+        if np.nanstd(diff[valid]) > MAX_PSEUDO_PHASE_STD_TECU:
             continue
-        bias = np.nanmean(diff)
+        bias = np.nanmean(diff[valid])
         std = np.nanstd(diff[valid]) / np.sqrt(n_valid) + DCB_ERROR_FLOOR_TECU
         phase_bias[seg_idx] = bias
         phase_std[seg_idx] = std
@@ -790,6 +791,12 @@ def get_gnss_station_density(
         if calculate_gim_bias and strategy == RinexStrategy.DCB_WITH_GIM_FALLBACK
         else None
     )
+    ipp_gim = get_stat_sat_ipp(
+                satpos=sat_pos,
+                gnsspos=gnss_pos_dict[gnss_data.station],
+                times=transmission_time,
+                height_array=[DEFAULT_IONO_HEIGHT,],
+            )
     for prn in prns:
         try:
             # Choose correction method based on strategy
@@ -885,7 +892,7 @@ def get_gnss_station_density(
                 else:
                     stec_value, stec_error = _get_gim_phase_corrected(
                         phase_stec,
-                        ipp_sat_stat[-1],
+                        ipp_gim,
                         all_time_indices,
                         ionex,
                         max_time_diff_min=max_time_diff_min,
@@ -895,7 +902,7 @@ def get_gnss_station_density(
             correction_method_flag = 1 if have_dcb else 0
             correction_methods.append(correction_method_flag)
 
-            # Accumulate GIM bias statistics when we have DCB correction
+            # Accumulate GIM bias statistics (DCB arcs only)
             if (
                 have_dcb
                 and gim_bias_stats is not None
@@ -903,22 +910,17 @@ def get_gnss_station_density(
                 and strategy == RinexStrategy.DCB_WITH_GIM_FALLBACK
             ):
                 try:
-                    default_options = tec_data.IonexOptions(remove_midnight_jumps=True)
-                    h_idx = np.argmin(
-                        np.abs(
-                            (ipp_sat_stat[-1].height[0] - R_EARTH_MEAN).to(u.km).value
-                            - default_options.height.to(u.km).value
-                        )
-                    )
                     gim_vtec = interpolate_ionex(
                         ionex,
-                        ipp_sat_stat[-1].lon[:, h_idx].to(u.deg).value,
-                        ipp_sat_stat[-1].lat[:, h_idx].to(u.deg).value,
-                        ipp_sat_stat[-1].times,
-                        apply_earth_rotation=default_options.apply_earth_rotation,
+                        ipp_gim.lon[:, 0].to(u.deg).value,
+                        ipp_gim.lat[:, 0].to(u.deg).value,
+                        ipp_gim.times,
+                        apply_earth_rotation=True,
                     )
                     gim_bias_stats.add(
-                        stec_value / ipp_sat_stat[-1].airmass[:, h_idx], gim_vtec
+                        stec_value / ipp_gim.airmass[:, 0],
+                        gim_vtec,
+                        elevation=ipp_gim.altaz.alt.deg,
                     )
                 except Exception:
                     pass

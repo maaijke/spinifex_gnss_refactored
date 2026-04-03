@@ -55,10 +55,10 @@ GNSS_OBS_PRIORITY = {
         "L2": ["L5Q", "L5X", "L7Q", "L7X"],
     },
     "R": {  # GLONASS         #quick fix, remove glonass because of different frequencies
-        "C1": ["C1P", "C1C"],
-        "C2": ["C2P", "C2C"],
-        "L1": ["L1P", "L1C"],
-        "L2": ["L2P", "L2C"],
+        "C1": ["C1P"],
+        "C2": ["C2P"],
+        "L1": ["L1P"],
+        "L2": ["L2P"],
     },
     "C": {  # BeiDou
         "C1": ["C2I", "C2Q", "C2X"],
