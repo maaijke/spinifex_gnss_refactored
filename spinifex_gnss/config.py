@@ -153,7 +153,9 @@ DEFAULT_IONO_HEIGHT = 450 * u.km
 
 # Minimum distance for GNSS station selection (in km)
 MIN_DISTANCE_SELECT = 1500 * u.km
-
+# Minimum number of epoch-level (DCB_stec - GIM_stec) differences needed
+# to trust the daily GIM bias estimate.
+MIN_DCB_ARCS_FOR_GIM_BIAS = 20
 # ============================================================================
 # Time Constants
 # ============================================================================

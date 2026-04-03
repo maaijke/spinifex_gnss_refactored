@@ -49,11 +49,36 @@ from spinifex_gnss.config import (
     DCB_ERROR_FLOOR_TECU,
     GIM_ERROR_FLOOR_TECU,
     MAX_PSEUDO_PHASE_STD_TECU,
+    MIN_DCB_ARCS_FOR_GIM_BIAS,
 )
 
 # ============================================================================
 # Helper Functions
 # ============================================================================
+from dataclasses import dataclass, field
+
+
+@dataclass
+class GimBiasStats:
+    """Accumulated (DCB_stec - GIM_stec) differences for one station/constellation."""
+
+    diffs: list = field(default_factory=list)  # individual epoch differences
+
+    def add(self, dcb_stec: np.ndarray, gim_stec: np.ndarray) -> None:
+        valid = ~np.isnan(dcb_stec) & ~np.isnan(gim_stec)
+        self.diffs.extend((dcb_stec[valid] - gim_stec[valid]).tolist())
+
+    @property
+    def n(self) -> int:
+        return len(self.diffs)
+
+    @property
+    def mean(self) -> float:
+        return float(np.mean(self.diffs)) if self.diffs else np.nan
+
+    @property
+    def std(self) -> float:
+        return float(np.std(self.diffs)) if len(self.diffs) > 1 else np.nan
 
 
 def _get_distance_km(loc1: u.Quantity, loc2: u.Quantity) -> np.ndarray:
@@ -335,6 +360,7 @@ def _get_distance_ipp_time_averaged(
     time_weights: np.ndarray,
     profiles: np.ndarray,
     use_time_weighting: bool = True,
+    correction_methods: np.ndarray = None,
 ) -> list[list[np.ndarray]]:
     """
     Calculate VTEC with time averaging (vectorized).
@@ -430,6 +456,7 @@ def _get_distance_ipp_time_averaged(
             all_dlon = []
             all_dlat = []
             all_time_weights = []
+            all_method_flags = []
 
             for slot_local_idx, (slot_idx, slot_weight) in enumerate(
                 zip(slot_indices, slot_weights)
@@ -467,8 +494,14 @@ def _get_distance_ipp_time_averaged(
                     all_dlon.append(dlon)
                     all_dlat.append(dlat)
                     all_time_weights.append(slot_weight)
+                    mflag = (
+                        correction_methods[prn_idx]
+                        if correction_methods is not None
+                        else np.nan
+                    )
+                    all_method_flags.append(mflag)
 
-            # Combine measurements
+            # Combine measurements — method flag always in the last column
             if len(all_vtec) > 0:
                 if use_time_weighting:
                     height_data.append(
@@ -479,12 +512,21 @@ def _get_distance_ipp_time_averaged(
                                 all_dlon,
                                 all_dlat,
                                 all_time_weights,
+                                all_method_flags,
                             ]
                         )
                     )
                 else:
                     height_data.append(
-                        np.column_stack([all_vtec, all_vtec_errors, all_dlon, all_dlat])
+                        np.column_stack(
+                            [
+                                all_vtec,
+                                all_vtec_errors,
+                                all_dlon,
+                                all_dlat,
+                                all_method_flags,
+                            ]
+                        )
                     )
             else:
                 height_data.append(np.array([]))
@@ -506,6 +548,7 @@ def _get_distance_ipp_nearest(
     ipp_target: IPP,
     timeselect: np.ndarray,
     profiles: np.ndarray,
+    correction_methods: np.ndarray,
 ) -> list[list[np.ndarray]]:
     """Calculate VTEC using nearest-neighbor time matching (original method)."""
     Ntimes = ipp_target.times.shape[0]
@@ -514,7 +557,7 @@ def _get_distance_ipp_nearest(
 
     vtecs = np.full((Nprns, Ntimes, Nheights), np.nan, dtype=float)
     vtec_errors = np.full((Nprns, Ntimes, Nheights), np.nan, dtype=float)
-
+    method_flags = np.full((Nprns, Ntimes, Nheights), np.nan, dtype=float)
     el_select = np.array(
         [ipp.altaz.alt.deg[timeselect] > ELEVATION_CUT for ipp in ipp_sat_stat]
     )
@@ -554,7 +597,8 @@ def _get_distance_ipp_nearest(
 
     vtecs[prn_select] = vtec_values[prn_select]
     vtec_errors[prn_select] = vtec_error_values[prn_select]
-
+    method_flags[:] = correction_methods[:, np.newaxis, np.newaxis]
+    method_flags[~prn_select] = np.nan
     return [
         [
             np.concatenate(
@@ -569,6 +613,9 @@ def _get_distance_ipp_nearest(
                         :, np.newaxis
                     ],
                     dlats[:, timeidx, hidx][~np.isnan(vtecs[:, timeidx, hidx])][
+                        :, np.newaxis
+                    ],
+                    method_flags[:, timeidx, hidx][~np.isnan(vtecs[:, timeidx, hidx])][
                         :, np.newaxis
                     ],
                 ),
@@ -616,16 +663,19 @@ def get_interpolated_tec(
             errors = measurements[:, 1]
             dlon = measurements[:, 2]
             dlat = measurements[:, 3]
-            if use_time_weighting and measurements.shape[1] >= 5:
-                time_weights = measurements[:, 4]
+            time_weights = (
+                measurements[:, 4]
+                if (use_time_weighting and measurements.shape[1] >= 6)
+                else None
+            )
             # filter nans
-            if np.any(np.isnan(measurements)):
-                nan_select = np.any(np.isnan(measurements), axis=1)
+            if np.any(np.isnan(measurements[:, :-1])):
+                nan_select = np.any(np.isnan(measurements[:, :-1]), axis=1)
                 vtec = vtec[~nan_select]
                 errors = errors[~nan_select]
                 dlon = dlon[~nan_select]
                 dlat = dlat[~nan_select]
-                if use_time_weighting and measurements.shape[1] >= 5:
+                if time_weights is not None:
                     time_weights = time_weights[~nan_select]
             # Select nearest measurements
             dist = np.sqrt(dlon**2 + dlat**2)
@@ -645,7 +695,7 @@ def get_interpolated_tec(
             )
 
             # Calculate weights
-            if use_time_weighting and measurements.shape[1] >= 5:
+            if time_weights is not None:
                 time_weights = time_weights[dist_select]
                 variance_weights = 1.0 / errors[dist_select]
                 weights = variance_weights * time_weights
@@ -699,6 +749,7 @@ def get_gnss_station_density(
     max_time_diff_min: float = 2.5,
     use_time_weighting: bool = False,
     strategy: RinexStrategy = RinexStrategy.DCB_WITH_GIM_FALLBACK,
+    calculate_gim_bias: bool = True,
 ) -> list[list[np.ndarray]]:
     """
     Process one GNSS station with optional time averaging.
@@ -733,7 +784,12 @@ def get_gnss_station_density(
     stec_values = []
     stec_errors = []
     ipp_sat_stat = []
-
+    correction_methods = []
+    gim_bias_stats = (
+        GimBiasStats()
+        if calculate_gim_bias and strategy == RinexStrategy.DCB_WITH_GIM_FALLBACK
+        else None
+    )
     for prn in prns:
         try:
             # Choose correction method based on strategy
@@ -759,14 +815,16 @@ def get_gnss_station_density(
                 )
 
             have_dcb = satellite_dcb_ns is not None and receiver_dcb_ns is not None
-            #check if we need to process this one
-            if not have_dcb and strategy==RinexStrategy.DCB_ONLY:
-                print(f"No dcb for {gnss_data.station} {prn} and user requested DCB_ONLY")
+            # check if we need to process this one
+            if not have_dcb and strategy == RinexStrategy.DCB_ONLY:
+                print(
+                    f"No dcb for {gnss_data.station} {prn} and user requested DCB_ONLY"
+                )
                 continue
-            
+
             tec_coeff = None
             sat_data = gnss_data.gnss[prn]
-            if not gnss_data.tec_coefficients is None:
+            if gnss_data.tec_coefficients is not None:
                 if prn in gnss_data.tec_coefficients:
                     tec_coeff = gnss_data.tec_coefficients[prn]
             transmission_time = get_transmission_time(sat_data[:, 1], gnss_data.times)
@@ -832,6 +890,38 @@ def get_gnss_station_density(
                         ionex,
                         max_time_diff_min=max_time_diff_min,
                     )
+
+            # Record correction method (1=DCB, 0=GIM) for this satellite
+            correction_method_flag = 1 if have_dcb else 0
+            correction_methods.append(correction_method_flag)
+
+            # Accumulate GIM bias statistics when we have DCB correction
+            if (
+                have_dcb
+                and gim_bias_stats is not None
+                and ionex is not None
+                and strategy == RinexStrategy.DCB_WITH_GIM_FALLBACK
+            ):
+                try:
+                    default_options = tec_data.IonexOptions(remove_midnight_jumps=True)
+                    h_idx = np.argmin(
+                        np.abs(
+                            (ipp_sat_stat[-1].height[0] - R_EARTH_MEAN).to(u.km).value
+                            - default_options.height.to(u.km).value
+                        )
+                    )
+                    gim_vtec = interpolate_ionex(
+                        ionex,
+                        ipp_sat_stat[-1].lon[:, h_idx].to(u.deg).value,
+                        ipp_sat_stat[-1].lat[:, h_idx].to(u.deg).value,
+                        ipp_sat_stat[-1].times,
+                        apply_earth_rotation=default_options.apply_earth_rotation,
+                    )
+                    gim_bias_stats.add(
+                        stec_value / ipp_sat_stat[-1].airmass[:, h_idx], gim_vtec
+                    )
+                except Exception:
+                    pass
             stec_values.append(stec_value)
             stec_errors.append(stec_error)
         except Exception as e:
@@ -840,7 +930,7 @@ def get_gnss_station_density(
     if len(stec_values) == 0:
         Ntimes = ipp_target.times.shape[0]
         Nheights = ipp_target.lon[0].shape[0]
-        return [[np.array([]) for _ in range(Nheights)] for _ in range(Ntimes)]
+        return [[np.array([]) for _ in range(Nheights)] for _ in range(Ntimes)], None
 
     stec_values = np.array(stec_values)
     stec_errors = np.array(stec_errors)
@@ -860,6 +950,7 @@ def get_gnss_station_density(
             ipp_target=ipp_target,
             timeselect=timeselect,
             profiles=profiles,
+            correction_methods=correction_methods,
         )
     else:
         # Time averaging (better coverage, still fast with vectorization)
@@ -879,10 +970,11 @@ def get_gnss_station_density(
             time_weights=time_weights,
             profiles=profiles,
             use_time_weighting=use_time_weighting,
+            correction_methods=correction_methods,
         )
 
     del stec_values, stec_errors, ipp_sat_stat
-    return result
+    return result, gim_bias_stats
 
 
 def get_ipp_density(
@@ -950,7 +1042,9 @@ def get_ipp_density(
     Nheights = ipp_target.lon.shape[1]
 
     all_data = [[[] for _ in range(Nheights)] for _ in range(Ntimes)]
-
+    gim_bias_stats = (
+        GimBiasStats() if strategy == RinexStrategy.DCB_WITH_GIM_FALLBACK else None
+    )
     # Process stations in parallel
     with ProcessPoolExecutor(max_workers=max_workers) as executor:
         future_to_station = {
@@ -974,8 +1068,10 @@ def get_ipp_density(
         for future in as_completed(future_to_station):
             station = future_to_station[future]
             try:
-                result = future.result()
-
+                # result = future.result()
+                result, station_gim_stats = future.result()
+                if not (gim_bias_stats is None or station_gim_stats is None):
+                    gim_bias_stats.diffs.extend(station_gim_stats.diffs)
                 # Validate and merge
                 if not isinstance(result, list) or len(result) != Ntimes:
                     print(f"Error: {station} returned invalid structure")
@@ -1015,6 +1111,37 @@ def get_ipp_density(
                     all_data[itm][hidx] = np.array([])
             else:
                 all_data[itm][hidx] = np.array([])
+    # Compute GIM bias from accumulated DCB vs GIM comparisons
+    gim_bias = np.nan
+    if gim_bias_stats is not None and gim_bias_stats.n >= MIN_DCB_ARCS_FOR_GIM_BIAS:
+        gim_bias = gim_bias_stats.mean
+        gim_bias_std = gim_bias_stats.std / np.sqrt(gim_bias_stats.n)
+        print(
+            f"  GIM bias: {gim_bias:+.2f} ± {gim_bias_std:.2f} TECU "
+            f"(n={gim_bias_stats.n} epochs)"
+        )
+
+        # Apply to all GIM-corrected rows (method_flag == 0, column index 4
+        # when no time-weighting, or 5 when time-weighting adds col 4)
+        method_col = 5 if use_time_weighting else 4
+        for itm in range(Ntimes):
+            for hidx in range(Nheights):
+                meas = all_data[itm][hidx]
+                if not isinstance(meas, np.ndarray) or meas.ndim < 2:
+                    continue
+                if meas.shape[1] <= method_col:
+                    continue
+                gim_rows = meas[:, method_col] == 0
+                meas[gim_rows, 0] += gim_bias  # shift vtec
+                meas[gim_rows, 1] = np.sqrt(  # inflate error
+                    meas[gim_rows, 1] ** 2 + gim_bias_std**2
+                )
+    else:
+        if gim_bias_stats is not None:
+            print(
+                f"  GIM bias: not estimated "
+                f"(need {MIN_DCB_ARCS_FOR_GIM_BIAS} epochs, have {gim_bias_stats.n})"
+            )
 
     # Interpolate
     electron_density = get_interpolated_tec(all_data, use_time_weighting)
