@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, Optional
 import gzip
 from typing import NamedTuple
-
+from spinifex_gnss.config import DCB_UNRELIABLE_SATELLITES
 _OBSERVABLE_PREFIXES = ("C", "L", "S", "P", "D")  # RINEX3 code observable first chars
 
 
@@ -217,7 +217,8 @@ def get_satellite_dcb(
     """
     if prn not in satellite_dcb:
         return None
-
+    if prn in DCB_UNRELIABLE_SATELLITES:
+        return None  # force GIM fallback for known bad DCBs
     obs_pair = f"{obs1}-{obs2}"
     if obs_pair in satellite_dcb[prn]:
         return satellite_dcb[prn][obs_pair]
