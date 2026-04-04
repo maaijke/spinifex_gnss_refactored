@@ -121,22 +121,29 @@ def _get_obs_code(rinex_data: RinexData, constellation: str, rxlabels: list[str]
             # Find best available C1/C2 pair with corresponding L1/L2
             c_tracking = None
 
-            # Try each priority combination
+            # Try each C1/C2 priority combination
             for c1 in c1c2_labels["C1"]:
                 for c2 in c1c2_labels["C2"]:
-                    l1 = f"L{c1[-2:]}"
-                    l2 = f"L{c2[-2:]}"
+                    if c1 not in labels or c2 not in labels:
+                        continue
 
-                    if c1 in labels and c2 in labels and l1 in labels and l2 in labels:
+                    # Find best available phase on the same frequency as c1/c2,
+                    # using the config priority list (independent of tracking code)
+                    # e.g. C1W -> freq='1' -> try L1W, L1P, L1Y, L1C in priority order
+                    l1 = next((l for l in c1c2_labels["L1"]
+                                if l[1] == c1[1] and l in labels), None)
+                    l2 = next((l for l in c1c2_labels["L2"]
+                                if l[1] == c2[1] and l in labels), None)
+
+                    if l1 is not None and l2 is not None:
                         c_tracking = (c1, c2)
+                        c1_str, c2_str = c_tracking
+                        l1_str, l2_str = l1, l2
                         break
                 if c_tracking:
-                    c1_str, c2_str = c_tracking
-                    l1_str = f"L{c1_str[-2:]}"
-                    l2_str = f"L{c2_str[-2:]}"
                     break
 
-            if not c_tracking:
+            if c_tracking is None:
                 return None, None, None, None
         else:
             c1c2_labels = GNSS_OBS_PRIORITY_RINEX2[constellation]

@@ -43,9 +43,9 @@ class RinexStrategy(Enum):
 # listed in priority order (most preferred first)
 GNSS_OBS_PRIORITY = {
     "G": {  # GPS
-        "C1": ["C1W", "C1P", "C1C", "C1Y"],  # W/P(Y) > C/A
+        "C1": ["C1C", "C1W", "C1P", "C1Y"],  # W/P(Y) > C/A
         "C2": ["C2W", "C2P", "C2Y", "C2L", "C2X"],
-        "L1": ["L1W", "L1P", "L1Y", "L1C"],
+        "L1": ["L1C", "L1W", "L1Y", "L1P"],
         "L2": ["L2W", "L2P", "L2Y", "L2L", "L2X"],
     },
     "E": {  # Galileo
@@ -55,10 +55,10 @@ GNSS_OBS_PRIORITY = {
         "L2": ["L5Q", "L5X", "L7Q", "L7X"],
     },
     "R": {  # GLONASS         #quick fix, remove glonass because of different frequencies
-        "C1": ["C1P"],
-        "C2": ["C2P"],
-        "L1": ["L1P"],
-        "L2": ["L2P"],
+        "C1": ["C1C", "C1P"],    # C1C for pseudorange is fine, most DCB coverage
+        "C2": ["C2C", "C2P"],    # C2C for pseudorange also fine
+        "L1": ["L1C", "L1P"],   # L1C most common, L1P where available
+        "L2": ["L2C", "L2P"],   # L2C must be allowed — L2P absent at LICC and WSRT
     },
     "C": {  # BeiDou
         "C1": ["C2I", "C2Q", "C2X"],
@@ -112,7 +112,7 @@ GNSS_OBS_PRIORITY_RINEX2 = {
     },
 }
 
-
+DCB_UNRELIABLE_SATELLITES = {'G04', 'G11', 'G14', 'G18', 'G23', 'G28'}
 # ============================================================================
 # GNSS Processing Constants
 # ============================================================================
