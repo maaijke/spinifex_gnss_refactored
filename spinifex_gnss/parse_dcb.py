@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Dict, Optional
 import gzip
 from typing import NamedTuple
-from spinifex_gnss.config import DCB_UNRELIABLE_SATELLITES
+from spinifex_gnss.config import DCB_UNRELIABLE_SATELLITES, DCB_UNRELIABLE_PAIRS
 _OBSERVABLE_PREFIXES = ("C", "L", "S", "P", "D")  # RINEX3 code observable first chars
 
 
@@ -219,6 +219,10 @@ def get_satellite_dcb(
         return None
     if prn in DCB_UNRELIABLE_SATELLITES:
         return None  # force GIM fallback for known bad DCBs
+    constellation = prn[0]
+    unreliable = DCB_UNRELIABLE_PAIRS.get(constellation, set())
+    if f"{obs1}-{obs2}" in unreliable or f"{obs2}-{obs1}" in unreliable:
+        return None
     obs_pair = f"{obs1}-{obs2}"
     if obs_pair in satellite_dcb[prn]:
         return satellite_dcb[prn][obs_pair]
@@ -294,7 +298,11 @@ def get_receiver_dcb_c1c2(
     - Short form: WSRT (first 4 chars)
     - This handles both 4-char and 9-char station names in DCB files
     """
+    unreliable = DCB_UNRELIABLE_PAIRS.get(constellation, set())
+    if f"{obs1}-{obs2}" in unreliable or f"{obs2}-{obs1}" in unreliable:
+        return None    
     # Try exact match first
+
     key = f"{constellation}_{station}_{obs1}_{obs2}"
     if key in receiver_dcb:
         return receiver_dcb[key]

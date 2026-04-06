@@ -105,6 +105,8 @@ def get_rinex_data(fname: Path) -> RinexData:
     width = 16
     no_cur_time = True
     for line in rinex_lines[end_of_header:]:
+        if "SYS" in line:
+            continue
         if line.startswith(">"):  # epoch record (RINEX 3)
             try:
                 parts = line.split()
