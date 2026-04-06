@@ -132,7 +132,7 @@ def parse_dcb_file(dcb_file: Path) -> DCBData:
                         # Store receiver DCB
                         if obs1[0] == "C" and obs2[0] == "C":
                             # Store as station_obs1_obs2 to allow multiple combinations per station
-                            constellation = parts[1]  # 'E', 'G', 'C', 'R' etc.
+                            constellation = prn[0]  # 'E', 'G', 'C', 'R' etc.
                             key = f"{constellation}_{station}_{obs1}_{obs2}"
                             receiver_dcb[key] = value
                     else:
