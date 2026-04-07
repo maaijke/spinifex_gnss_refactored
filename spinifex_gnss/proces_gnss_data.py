@@ -1048,7 +1048,7 @@ def get_ipp_density(
 
     all_data = [[[] for _ in range(Nheights)] for _ in range(Ntimes)]
     gim_bias_stats = (
-        GimBiasStats() if strategy == RinexStrategy.DCB_WITH_GIM_FALLBACK else None
+        GimBiasStats() if strategy == RinexStrategy.DCB_WITH_GIM_FALLBACK_AND_BIAS else None
     )
     # Process stations in parallel
     with ProcessPoolExecutor(max_workers=max_workers) as executor:

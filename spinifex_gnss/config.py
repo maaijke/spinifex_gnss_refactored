@@ -26,13 +26,17 @@ class RinexStrategy(Enum):
 
     DCB_WITH_GIM_FALLBACK
         Use DCB where available; fall back to GIM for satellites that lack
-        DCB values. Requires both DCB and IONEX downloads. This is the
-        previous default behaviour.
-    """
+        DCB values. Requires both DCB and IONEX downloads. 
+    DCB_WITH_GIM_FALLBACK_AND_BIAS
+        Use DCB where available; fall back to GIM for satellites that lack
+        DCB values. Requires both DCB and IONEX downloads. 
+        Tries to scale gim values based on dcb corrected arcs
+   """
 
     DCB_ONLY = "dcb_only"
     GIM_ONLY = "gim_only"
     DCB_WITH_GIM_FALLBACK = "dcb_with_gim_fallback"
+    DCB_WITH_GIM_FALLBACK_AND_BIAS = "dcb_with_gim_fallback_and_bias"
 
 
 # ============================================================================
